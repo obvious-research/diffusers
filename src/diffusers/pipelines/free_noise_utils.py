@@ -159,7 +159,7 @@ class AnimateDiffFreeNoiseMixin:
                         self._free_noise_weighting_scheme,
                     )
                 else:
-                    assert isinstance(motion_module.transformer_blocks[i], BasicTransformerBlock)
+                    assert isinstance(motion_module.transformer_blocks[i], BasicTransformerBlock), f"Invalid block type {type(motion_module.transformer_blocks[i])}"
                     basic_transfomer_block = motion_module.transformer_blocks[i]
 
                     motion_module.transformer_blocks[i] = FreeNoiseTransformerBlock(
