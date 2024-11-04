@@ -2286,11 +2286,11 @@ class UNetMidBlockFlatCrossAttn(nn.Module):
             if cross_attention_kwargs.get("scale", None) is not None:
                 logger.warning("Passing `scale` to `cross_attention_kwargs` is deprecated. `scale` will be ignored.")
 
-        hidden_states = self.resnets[0](hidden_states, temb)
+        hidden_states = self.resnets[0](input_tensor=hidden_states, temb=temb)
         for attn, resnet in zip(self.attentions, self.resnets[1:]):
             if torch.is_grad_enabled() and self.gradient_checkpointing:
                 hidden_states = attn(
-                    hidden_states,
+                    hidden_states=hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
                     cross_attention_kwargs=cross_attention_kwargs,
                     attention_mask=attention_mask,
@@ -2300,14 +2300,14 @@ class UNetMidBlockFlatCrossAttn(nn.Module):
                 hidden_states = self._gradient_checkpointing_func(resnet, hidden_states, temb)
             else:
                 hidden_states = attn(
-                    hidden_states,
+                    hidden_states=hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
                     cross_attention_kwargs=cross_attention_kwargs,
                     attention_mask=attention_mask,
                     encoder_attention_mask=encoder_attention_mask,
                     return_dict=False,
                 )[0]
-                hidden_states = resnet(hidden_states, temb)
+                hidden_states = resnet(input_tensor=hidden_states, temb=temb)
 
         return hidden_states
 
