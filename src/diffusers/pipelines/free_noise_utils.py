@@ -117,10 +117,42 @@ class SplitInferenceModule(nn.Module):
 
         # 1. Split inputs that were specified during initialization and also present in passed kwargs
         for key in list(kwargs.keys()):
-            if key not in self.input_kwargs_to_split or not torch.is_tensor(kwargs[key]):
+            if key not in self.input_kwargs_to_split or not (torch.is_tensor(kwargs[key]) or isinstance(kwargs[key], dict)):
                 continue
-            split_inputs[key] = torch.split(kwargs[key], self.split_size, self.split_dim)
+            if isinstance(kwargs[key], dict):
+                split_inputs[key] = {}
+                for sub_key in kwargs[key].keys():
+                    if torch.is_tensor(kwargs[key][sub_key]):
+                        split_inputs[key][sub_key] = torch.split(kwargs[key][sub_key], self.split_size, self.split_dim)
+                    else:
+                        split_inputs[key][sub_key] = kwargs[key][sub_key]
+
+            else:
+                split_inputs[key] = torch.split(kwargs[key], self.split_size, self.split_dim)
             kwargs.pop(key)
+
+        # reordering
+        for key in split_inputs.keys():
+            if isinstance(split_inputs[key], tuple) and torch.is_tensor(split_inputs[key][0]):
+                num_splits = len(split_inputs[key])
+                break
+            elif isinstance(split_inputs[key], dict):
+                for sub_key in split_inputs[key].keys():
+                    if torch.is_tensor(split_inputs[key][sub_key]):
+                        num_splits = len(split_inputs[key][sub_key])
+                        break
+
+        for key in split_inputs.keys():
+            if isinstance(split_inputs[key], dict):
+                temp = list({} for _ in range(num_splits))
+                for sub_key in split_inputs[key].keys():
+                    if isinstance(split_inputs[key][sub_key], tuple):
+                        for i in range(num_splits):
+                            temp[i][sub_key] = split_inputs[key][sub_key][i]
+                    else:
+                        for i in range(num_splits):
+                            temp[i][sub_key] = split_inputs[key][sub_key]
+                split_inputs[key] = temp
 
         # 2. Invoke forward pass across each split
         results = []
@@ -159,7 +191,7 @@ class AnimateDiffFreeNoiseMixin:
                         self._free_noise_weighting_scheme,
                     )
                 else:
-                    assert isinstance(motion_module.transformer_blocks[i], BasicTransformerBlock)
+                    assert isinstance(motion_module.transformer_blocks[i], BasicTransformerBlock), f"Invalid block type {type(motion_module.transformer_blocks[i])}"
                     basic_transfomer_block = motion_module.transformer_blocks[i]
 
                     motion_module.transformer_blocks[i] = FreeNoiseTransformerBlock(
