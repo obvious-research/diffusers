@@ -1003,7 +1003,7 @@ class BasicTransformerBlock(nn.Module):
         gligen_kwargs = cross_attention_kwargs.pop("gligen", None)
 
         attn_output = self.attn1(
-            norm_hidden_states,
+            hidden_states=norm_hidden_states,
             encoder_hidden_states=encoder_hidden_states if self.only_cross_attention else None,
             attention_mask=attention_mask,
             **cross_attention_kwargs,
@@ -1041,7 +1041,7 @@ class BasicTransformerBlock(nn.Module):
                 norm_hidden_states = self.pos_embed(norm_hidden_states)
 
             attn_output = self.attn2(
-                norm_hidden_states,
+                hidden_states=norm_hidden_states,
                 encoder_hidden_states=encoder_hidden_states,
                 attention_mask=encoder_attention_mask,
                 **cross_attention_kwargs,
@@ -1567,7 +1567,7 @@ class FreeNoiseTransformerBlock(nn.Module):
             if cross_attention_kwargs.get("scale", None) is not None:
                 logger.warning("Passing `scale` to `cross_attention_kwargs` is deprecated. `scale` will be ignored.")
 
-        cross_attention_kwargs = cross_attention_kwargs.copy() if cross_attention_kwargs is not None else {}
+        cross_attention_kwargs_copy = cross_attention_kwargs.copy() if cross_attention_kwargs is not None else {}
 
         # hidden_states: [B x H x W, F, C]
         device = hidden_states.device
@@ -1599,6 +1599,13 @@ class FreeNoiseTransformerBlock(nn.Module):
             weights *= frame_weights
 
             hidden_states_chunk = hidden_states[:, frame_start:frame_end]
+            cross_attention_kwargs_chunk = {}
+
+            for key, value in cross_attention_kwargs_copy.items():
+                if isinstance(value, torch.Tensor):
+                    cross_attention_kwargs_chunk[key] = value[:, frame_start:frame_end]
+                else:
+                    cross_attention_kwargs_chunk[key] = value
 
             # Notice that normalization is always applied before the real computation in the following blocks.
             # 1. Self-Attention
@@ -1608,10 +1615,10 @@ class FreeNoiseTransformerBlock(nn.Module):
                 norm_hidden_states = self.pos_embed(norm_hidden_states)
 
             attn_output = self.attn1(
-                norm_hidden_states,
+                hidden_states=norm_hidden_states,
                 encoder_hidden_states=encoder_hidden_states if self.only_cross_attention else None,
                 attention_mask=attention_mask,
-                **cross_attention_kwargs,
+                **cross_attention_kwargs_chunk,
             )
 
             hidden_states_chunk = attn_output + hidden_states_chunk
@@ -1626,10 +1633,10 @@ class FreeNoiseTransformerBlock(nn.Module):
                     norm_hidden_states = self.pos_embed(norm_hidden_states)
 
                 attn_output = self.attn2(
-                    norm_hidden_states,
+                    hidden_states=norm_hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
                     attention_mask=encoder_attention_mask,
-                    **cross_attention_kwargs,
+                    **cross_attention_kwargs_chunk,
                 )
                 hidden_states_chunk = attn_output + hidden_states_chunk
 
