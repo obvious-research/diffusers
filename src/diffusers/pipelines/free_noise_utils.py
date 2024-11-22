@@ -113,14 +113,65 @@ class SplitInferenceModule(nn.Module):
                 - If the underlying module returns a tuple of tensors, each element of the tuple will be concatenated
                 along the `split_dim` across all splits, and the final result will be a tuple of concatenated tensors.
         """
+
+        def recursive_split(inputs):
+            if torch.is_tensor(inputs):
+                splitted_tensors = torch.split(inputs, self.split_size, self.split_dim)
+                return splitted_tensors, True
+            elif isinstance(inputs, (list, tuple)):
+                splitted_iterables = [recursive_split(x) for x in inputs]
+
+                # filter all splitted tensors
+                splitted_tensors = [x[0] for x in splitted_iterables if x[1]]
+
+                # check if all elements have the same length
+                if len(splitted_tensors) != 0:
+                    num_chunks = len(splitted_tensors[0])
+                    if not all(len(x) == num_chunks for x in splitted_tensors):
+                        raise ValueError("All elements must have the same length to be splitted similarly.")
+                    splitted_iterables = [x[0] if x[1] else [x[0]] * num_chunks for x in splitted_iterables]
+                    splitted_iterables = list(zip(*splitted_iterables))
+                    # change the elements type according to the input type
+                    if isinstance(inputs, tuple):
+                        return splitted_iterables, True
+                    else:
+                        return [list(x) for x in splitted_iterables], True
+                else:
+                    return inputs, False
+            elif isinstance(inputs, dict):
+                splitted_dict = {}
+                is_splitted_dict = {}
+                for key, value in inputs.items():
+                    splitted_dict[key], is_splitted_dict[key] = recursive_split(value)
+                if is_splitted_dict != {}:
+                    num_chunks = len(splitted_dict[next(iter(is_splitted_dict.keys()))])
+                    if not all(len(splitted_dict[key]) == num_chunks if is_splitted_dict[key] else True for key in is_splitted_dict.keys()):
+                        raise ValueError("All elements must have the same length to be splitted similarly.")
+                    splitted_dict = {key: splitted_dict[key] if is_splitted_dict[key] else [splitted_dict[key]] * num_chunks for key in splitted_dict.keys()}
+                    splitted_dict = [{key: value[i] for key, value in splitted_dict.items()} for i in range(num_chunks)]
+                    return splitted_dict, True
+                else:
+                    return inputs, False
+            else:
+                return inputs, False
+
         split_inputs = {}
 
         # 1. Split inputs that were specified during initialization and also present in passed kwargs
         for key in list(kwargs.keys()):
-            if key not in self.input_kwargs_to_split or not torch.is_tensor(kwargs[key]):
+            if key not in self.input_kwargs_to_split or kwargs[key] is None:
                 continue
-            split_inputs[key] = torch.split(kwargs[key], self.split_size, self.split_dim)
-            kwargs.pop(key)
+            if torch.is_tensor(kwargs[key]):
+                split_inputs[key] = torch.split(kwargs.pop(key), self.split_size, self.split_dim)
+            elif isinstance(kwargs[key], (list, tuple, dict)):
+                split_inputs[key], _ = recursive_split(kwargs.pop(key))
+            else:
+                raise ValueError(
+                    "The input tensors to be split must be of type `torch.Tensor`, `list`, `tuple`, or `dict`.")
+
+        # 1.5. Verify the splits are consistent
+        assert all(isinstance(value, (list, tuple)) for value in split_inputs.values()), "Input_kwargs_to_split must at list contain one tensor to split"
+        assert all(len(value) == len(list(split_inputs.values())[0]) for value in split_inputs.values()), "All elements must have the same length to be splitted similarly."
 
         # 2. Invoke forward pass across each split
         results = []
