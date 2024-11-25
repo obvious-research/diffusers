@@ -1379,9 +1379,8 @@ class AttnAddedKVProcessor2_0:
             value = encoder_hidden_states_value_proj
 
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
-        # TODO: add support for attn.scale when we move to Torch 2.1
         hidden_states = F.scaled_dot_product_attention(
-            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False, scale=attn.scale
         )
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, residual.shape[1])
 
@@ -2037,9 +2036,8 @@ class AllegroAttnProcessor2_0:
             key = apply_rotary_emb_allegro(key, image_rotary_emb[0], image_rotary_emb[1])
 
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
-        # TODO: add support for attn.scale when we move to Torch 2.1
         hidden_states = F.scaled_dot_product_attention(
-            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False, scale=attn.scale
         )
 
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
@@ -3045,9 +3043,8 @@ class AttnProcessorNPU:
                 inner_precise=0,
             )[0]
         else:
-            # TODO: add support for attn.scale when we move to Torch 2.1
             hidden_states = F.scaled_dot_product_attention(
-                query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+                query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False, scale=attn.scale
             )
 
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
@@ -3139,9 +3136,8 @@ class AttnProcessor2_0:
             key = attn.norm_k(key)
 
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
-        # TODO: add support for attn.scale when we move to Torch 2.1
         hidden_states = F.scaled_dot_product_attention(
-            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False, scale=attn.scale
         )
 
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
@@ -3343,9 +3339,8 @@ class MochiVaeAttnProcessor2_0:
             key = attn.norm_k(key)
 
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
-        # TODO: add support for attn.scale when we move to Torch 2.1
         hidden_states = F.scaled_dot_product_attention(
-            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=attn.is_causal
+            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=attn.is_causal, scale=attn.scale
         )
 
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
@@ -3470,10 +3465,8 @@ class StableAudioAttnProcessor2_0:
             query = query.to(query_dtype)
             key = key.to(key_dtype)
 
-        # the output of sdp = (batch, num_heads, seq_len, head_dim)
-        # TODO: add support for attn.scale when we move to Torch 2.1
         hidden_states = F.scaled_dot_product_attention(
-            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False, scale=attn.scale
         )
 
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
@@ -3569,9 +3562,8 @@ class HunyuanAttnProcessor2_0:
                 key = apply_rotary_emb(key, image_rotary_emb)
 
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
-        # TODO: add support for attn.scale when we move to Torch 2.1
         hidden_states = F.scaled_dot_product_attention(
-            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False, scale=attn.scale
         )
 
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
@@ -3672,9 +3664,8 @@ class FusedHunyuanAttnProcessor2_0:
                 key = apply_rotary_emb(key, image_rotary_emb)
 
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
-        # TODO: add support for attn.scale when we move to Torch 2.1
         hidden_states = F.scaled_dot_product_attention(
-            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False, scale=attn.scale
         )
 
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
@@ -3777,9 +3768,8 @@ class PAGHunyuanAttnProcessor2_0:
                 key = apply_rotary_emb(key, image_rotary_emb)
 
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
-        # TODO: add support for attn.scale when we move to Torch 2.1
         hidden_states_org = F.scaled_dot_product_attention(
-            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False, scale=attn.scale
         )
 
         hidden_states_org = hidden_states_org.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
@@ -3901,9 +3891,8 @@ class PAGCFGHunyuanAttnProcessor2_0:
                 key = apply_rotary_emb(key, image_rotary_emb)
 
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
-        # TODO: add support for attn.scale when we move to Torch 2.1
         hidden_states_org = F.scaled_dot_product_attention(
-            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False, scale=attn.scale
         )
 
         hidden_states_org = hidden_states_org.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
@@ -4030,7 +4019,6 @@ class LuminaAttnProcessor2_0:
         value = value.transpose(1, 2)
 
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
-        # TODO: add support for attn.scale when we move to Torch 2.1
         hidden_states = F.scaled_dot_product_attention(
             query, key, value, attn_mask=attention_mask, scale=softmax_scale
         )
@@ -4121,9 +4109,8 @@ class FusedAttnProcessor2_0:
             key = attn.norm_k(key)
 
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
-        # TODO: add support for attn.scale when we move to Torch 2.1
         hidden_states = F.scaled_dot_product_attention(
-            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False, scale=attn.scale
         )
 
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
@@ -4353,9 +4340,8 @@ class CustomDiffusionAttnProcessor2_0(nn.Module):
         value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
 
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
-        # TODO: add support for attn.scale when we move to Torch 2.1
         hidden_states = F.scaled_dot_product_attention(
-            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False, scale=attn.scale
         )
 
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
@@ -4893,9 +4879,8 @@ class IPAdapterAttnProcessor2_0(torch.nn.Module):
         value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
 
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
-        # TODO: add support for attn.scale when we move to Torch 2.1
         hidden_states = F.scaled_dot_product_attention(
-            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False, scale=attn.scale
         )
 
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
@@ -4956,9 +4941,8 @@ class IPAdapterAttnProcessor2_0(torch.nn.Module):
                         ip_value = ip_value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
 
                         # the output of sdp = (batch, num_heads, seq_len, head_dim)
-                        # TODO: add support for attn.scale when we move to Torch 2.1
                         _current_ip_hidden_states = F.scaled_dot_product_attention(
-                            query, ip_key, ip_value, attn_mask=None, dropout_p=0.0, is_causal=False
+                            query, ip_key, ip_value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=attn.scale
                         )
 
                         _current_ip_hidden_states = _current_ip_hidden_states.transpose(1, 2).reshape(
@@ -4983,9 +4967,8 @@ class IPAdapterAttnProcessor2_0(torch.nn.Module):
                     ip_value = ip_value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
 
                     # the output of sdp = (batch, num_heads, seq_len, head_dim)
-                    # TODO: add support for attn.scale when we move to Torch 2.1
                     current_ip_hidden_states = F.scaled_dot_product_attention(
-                        query, ip_key, ip_value, attn_mask=None, dropout_p=0.0, is_causal=False
+                        query, ip_key, ip_value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=attn.scale
                     )
 
                     current_ip_hidden_states = current_ip_hidden_states.transpose(1, 2).reshape(
@@ -5470,9 +5453,8 @@ class PAGIdentitySelfAttnProcessor2_0:
         value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
 
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
-        # TODO: add support for attn.scale when we move to Torch 2.1
         hidden_states_org = F.scaled_dot_product_attention(
-            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False, scale=attn.scale
         )
         hidden_states_org = hidden_states_org.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
         hidden_states_org = hidden_states_org.to(query.dtype)
@@ -5571,9 +5553,8 @@ class PAGCFGIdentitySelfAttnProcessor2_0:
         value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
 
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
-        # TODO: add support for attn.scale when we move to Torch 2.1
         hidden_states_org = F.scaled_dot_product_attention(
-            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False, scale=attn.scale
         )
 
         hidden_states_org = hidden_states_org.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
