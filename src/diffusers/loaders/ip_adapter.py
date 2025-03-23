@@ -369,7 +369,6 @@ class FluxIPAdapterMixin:
         subfolder: Optional[Union[str, List[str]]] = "",
         image_encoder_pretrained_model_name_or_path: Optional[str] = "image_encoder",
         image_encoder_subfolder: Optional[str] = "",
-        image_encoder_dtype: torch.dtype = torch.float16,
         **kwargs,
     ):
         """
@@ -509,8 +508,8 @@ class FluxIPAdapterMixin:
             else:
                 state_dict = pretrained_model_name_or_path_or_dict
 
-            keys = list(state_dict.keys())
-            if keys != ["image_proj", "ip_adapter"]:
+            keys = set(state_dict.keys())
+            if keys != set(["image_proj", "ip_adapter"]):
                 raise ValueError("Required keys are (`image_proj` and `ip_adapter`) missing from the state dict.")
 
             state_dicts.append(state_dict)
@@ -521,13 +520,13 @@ class FluxIPAdapterMixin:
                     if not isinstance(pretrained_model_name_or_path_or_dict, dict):
                         logger.info(f"loading image_encoder from {image_encoder_pretrained_model_name_or_path}")
                         image_encoder = (
-                            CLIPVisionModelWithProjection.from_pretrained(
+                            SiglipVisionModel.from_pretrained(
                                 image_encoder_pretrained_model_name_or_path,
                                 subfolder=image_encoder_subfolder,
                                 low_cpu_mem_usage=low_cpu_mem_usage,
                                 cache_dir=cache_dir,
                                 local_files_only=local_files_only,
-                                dtype=image_encoder_dtype,
+                                #dtype=image_encoder_dtype,
                             )
                             .to(self.device)
                             .eval()
