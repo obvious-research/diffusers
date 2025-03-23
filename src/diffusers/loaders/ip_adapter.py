@@ -35,7 +35,8 @@ from .unet_loader_utils import _maybe_expand_lora_scales
 
 
 if is_transformers_available():
-    from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection, SiglipImageProcessor, SiglipVisionModel
+    from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection, SiglipImageProcessor, SiglipVisionModel, \
+    AutoConfig, CLIPConfig, SiglipConfig
 
 from ..models.attention_processor import (
     AttnProcessor,
@@ -750,8 +751,8 @@ class FluxIPAdapterMixin:
             else:
                 state_dict = pretrained_model_name_or_path_or_dict
 
-            keys = list(state_dict.keys())
-            if keys != ["image_proj", "ip_adapter"]:
+            keys = set(state_dict.keys())
+            if keys != set(["image_proj", "ip_adapter"]):
                 raise ValueError("Required keys are (`image_proj` and `ip_adapter`) missing from the state dict.")
 
             state_dicts.append(state_dict)
@@ -761,8 +762,13 @@ class FluxIPAdapterMixin:
                 if image_encoder_pretrained_model_name_or_path is not None:
                     if not isinstance(pretrained_model_name_or_path_or_dict, dict):
                         logger.info(f"loading image_encoder from {image_encoder_pretrained_model_name_or_path}")
+                        config = AutoConfig.from_pretrained(image_encoder_pretrained_model_name_or_path)
+                        if isinstance(config, SiglipConfig):
+                            image_encoder_class =  SiglipVisionModel
+                        elif isinstance(config, CLIPConfig):
+                            image_encoder_class = CLIPVisionModelWithProjection
                         image_encoder = (
-                            CLIPVisionModelWithProjection.from_pretrained(
+                            image_encoder_class.from_pretrained(
                                 image_encoder_pretrained_model_name_or_path,
                                 subfolder=image_encoder_subfolder,
                                 low_cpu_mem_usage=low_cpu_mem_usage,
