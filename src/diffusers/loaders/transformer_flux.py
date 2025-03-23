@@ -28,6 +28,27 @@ if is_accelerate_available():
 
 logger = logging.get_logger(__name__)
 
+import torch
+
+class MLPProjModel(torch.nn.Module):
+    def __init__(self, cross_attention_dim=768, image_embed_dim=512, num_image_text_embeds=4):
+        super().__init__()
+
+        self.cross_attention_dim = cross_attention_dim
+        self.num_image_text_embeds = num_image_text_embeds
+
+        self.proj = torch.nn.Sequential(
+            torch.nn.Linear(image_embed_dim, image_embed_dim * 2),
+            torch.nn.GELU(),
+            torch.nn.Linear(image_embed_dim * 2, cross_attention_dim * num_image_text_embeds),
+        )
+        self.norm = torch.nn.LayerNorm(cross_attention_dim)
+
+    def forward(self, id_embeds):
+        x = self.proj(id_embeds)
+        x = x.reshape(-1, self.num_image_text_embeds, self.cross_attention_dim)
+        x = self.norm(x)
+        return x
 
 class FluxTransformer2DLoadersMixin:
     """
@@ -58,24 +79,27 @@ class FluxTransformer2DLoadersMixin:
         image_projection = None
         init_context = init_empty_weights if low_cpu_mem_usage else nullcontext
 
-        if "proj.weight" in state_dict:
+        if "proj.0.weight" in state_dict:
             # IP-Adapter
             num_image_text_embeds = 4
-            if state_dict["proj.weight"].shape[0] == 65536:
+
+            if state_dict["proj.2.weight"].shape[0] == 65536:
                 num_image_text_embeds = 16
-            clip_embeddings_dim = state_dict["proj.weight"].shape[-1]
-            cross_attention_dim = state_dict["proj.weight"].shape[0] // num_image_text_embeds
+            if state_dict["proj.2.weight"].shape[0] == 524288:
+                num_image_text_embeds = 128
+            clip_embeddings_dim = state_dict["proj.0.weight"].shape[-1]
+            cross_attention_dim = state_dict["proj.2.weight"].shape[0] // num_image_text_embeds
 
             with init_context():
-                image_projection = ImageProjection(
+                image_projection = MLPProjModel(
                     cross_attention_dim=cross_attention_dim,
                     image_embed_dim=clip_embeddings_dim,
                     num_image_text_embeds=num_image_text_embeds,
                 )
 
             for key, value in state_dict.items():
-                diffusers_name = key.replace("proj", "image_embeds")
-                updated_state_dict[diffusers_name] = value
+                #diffusers_name = key.replace("proj", "image_embeds")
+                updated_state_dict[key] = value
 
         if not low_cpu_mem_usage:
             image_projection.load_state_dict(updated_state_dict, strict=True)
@@ -143,8 +167,8 @@ class FluxTransformer2DLoadersMixin:
                 for i, state_dict in enumerate(state_dicts):
                     value_dict.update({f"to_k_ip.{i}.weight": state_dict["ip_adapter"][f"{key_id}.to_k_ip.weight"]})
                     value_dict.update({f"to_v_ip.{i}.weight": state_dict["ip_adapter"][f"{key_id}.to_v_ip.weight"]})
-                    value_dict.update({f"to_k_ip.{i}.bias": state_dict["ip_adapter"][f"{key_id}.to_k_ip.bias"]})
-                    value_dict.update({f"to_v_ip.{i}.bias": state_dict["ip_adapter"][f"{key_id}.to_v_ip.bias"]})
+                    #value_dict.update({f"to_k_ip.{i}.bias": state_dict["ip_adapter"][f"{key_id}.to_k_ip.bias"]})
+                    #value_dict.update({f"to_v_ip.{i}.bias": state_dict["ip_adapter"][f"{key_id}.to_v_ip.bias"]})
 
                 if not low_cpu_mem_usage:
                     attn_procs[name].load_state_dict(value_dict)
