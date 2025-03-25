@@ -35,7 +35,8 @@ from .unet_loader_utils import _maybe_expand_lora_scales
 
 
 if is_transformers_available():
-    from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection, SiglipImageProcessor, SiglipVisionModel
+    from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection, SiglipImageProcessor, SiglipVisionModel, \
+    AutoConfig, CLIPConfig, SiglipConfig
 
 from ..models.attention_processor import (
     AttnProcessor,
@@ -369,6 +370,7 @@ class FluxIPAdapterMixin:
         subfolder: Optional[Union[str, List[str]]] = "",
         image_encoder_pretrained_model_name_or_path: Optional[str] = "image_encoder",
         image_encoder_subfolder: Optional[str] = "",
+        image_encoder_dtype: torch.dtype = torch.float16,
         **kwargs,
     ):
         """
@@ -519,14 +521,19 @@ class FluxIPAdapterMixin:
                 if image_encoder_pretrained_model_name_or_path is not None:
                     if not isinstance(pretrained_model_name_or_path_or_dict, dict):
                         logger.info(f"loading image_encoder from {image_encoder_pretrained_model_name_or_path}")
+                        config = AutoConfig.from_pretrained(image_encoder_pretrained_model_name_or_path)
+                        if isinstance(config, SiglipConfig):
+                            image_encoder_class =  SiglipVisionModel
+                        elif isinstance(config, CLIPConfig):
+                            image_encoder_class = CLIPVisionModelWithProjection
                         image_encoder = (
-                            SiglipVisionModel.from_pretrained(
+                            image_encoder_class.from_pretrained(
                                 image_encoder_pretrained_model_name_or_path,
                                 subfolder=image_encoder_subfolder,
                                 low_cpu_mem_usage=low_cpu_mem_usage,
                                 cache_dir=cache_dir,
                                 local_files_only=local_files_only,
-                                #dtype=image_encoder_dtype,
+                                torch_dtype=image_encoder_dtype,
                             )
                             .to(self.device)
                             .eval()
