@@ -960,7 +960,8 @@ class FluxPanoramaPipeline(
             height, width,
             window_size_height=height_generation // self.vae_scale_factor,
             window_size_width=width_generation // self.vae_scale_factor,
-            stride=stride // self.vae_scale_factor)
+            stride=stride // self.vae_scale_factor,
+        )
 
         latent_image_ids = self._prepare_latent_image_ids(
             batch_size,
@@ -982,6 +983,8 @@ class FluxPanoramaPipeline(
             for i, t in enumerate(timesteps):
                 if self.interrupt:
                     continue
+
+                self._current_timestep = t
 
                 # Reset count and value for this timestep
                 count.zero_()
@@ -1006,10 +1009,6 @@ class FluxPanoramaPipeline(
                         width_generation // self.vae_scale_factor
                     )
 
-                    # Restore this batch's scheduler status
-                    self.scheduler.__dict__.update(views_scheduler_status[j])
-
-                    self._current_timestep = t
                     if image_embeds is not None:
                         self._joint_attention_kwargs["ip_adapter_image_embeds"] = image_embeds
                     # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
@@ -1042,27 +1041,18 @@ class FluxPanoramaPipeline(
                             return_dict=False,
                         )[0]
                         noise_pred = neg_noise_pred + true_cfg_scale * (noise_pred - neg_noise_pred)
-
-                    # compute the previous noisy sample x_t -> x_t-1
-                    latents_dtype = latents_for_view.dtype
-                    latents_denoised_batch = self.scheduler.step(noise_pred, t, latents_for_view, return_dict=False)[0]
-
-                    latents_denoised_batch = self._unpack_latents(latents_denoised_batch, height_generation, width_generation, self.vae_scale_factor)
-
+                    noise_pred_unpacked = self._unpack_latents(noise_pred, height_generation, width_generation, self.vae_scale_factor)
                     # Accumulate the denoised results for each view
-                    for latents_view_denoised, (h_start, h_end, w_start, w_end) in zip(
-                            latents_denoised_batch.chunk(view_batch_size), batch_view
+                    for noise_pred_local, (h_start, h_end, w_start, w_end) in zip(
+                            noise_pred_unpacked.chunk(view_batch_size), batch_view
                     ):
-                        value[:, :, h_start:h_end, w_start:w_end] += latents_view_denoised
+                        value[:, :, h_start:h_end, w_start:w_end] += noise_pred_local
                         count[:, :, h_start:h_end, w_start:w_end] += 1
 
-                if latents_for_view.dtype != latents_dtype:
-                    if torch.backends.mps.is_available():
-                        # some platforms (eg. apple mps) misbehave due to a pytorch bug: https://github.com/pytorch/pytorch/pull/99272
-                        latents_for_view = latents_for_view.to(latents_dtype)
-
-                # Average the latents using the accumulated values and counts
-                latents = torch.where(count > 0, value / count, value)
+                # Average the noise_pred using the accumulated values and counts
+                # compute the previous noisy sample x_t -> x_t-1
+                noise_pred_global = torch.where(count > 0, value / count, value)
+                latents = self.scheduler.step(noise_pred_global, t, latents, return_dict=False)[0]
 
                 if callback_on_step_end is not None:
                     callback_kwargs = {}
