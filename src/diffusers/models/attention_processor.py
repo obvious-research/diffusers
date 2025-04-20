@@ -2468,6 +2468,99 @@ class FluxAttnProcessor2_0_NPU:
             return hidden_states
 
 
+class RegionalFluxAttnProcessor2_0:
+    def __init__(self):
+        self.regional_mask = None
+        self.FluxAttnProcessor2_0_call = FluxAttnProcessor2_0().__call__
+
+    def __call__(
+            self,
+            attn,
+            hidden_states,
+            hidden_states_base=None,
+            encoder_hidden_states=None,
+            encoder_hidden_states_base=None,
+            attention_mask=None,
+            image_rotary_emb=None,
+            image_rotary_emb_base=None,
+            encoder_seq_len=None,
+            encoder_seq_len_base=None,
+            regional_attention_mask=None,
+            base_ratio=None,
+    ) -> torch.FloatTensor:
+
+        if base_ratio is not None:
+            attn_output_base = self.FluxAttnProcessor2_0_call(
+                attn=attn,
+                hidden_states=hidden_states_base if hidden_states_base is not None else hidden_states,
+                encoder_hidden_states=encoder_hidden_states_base,
+                attention_mask=None,
+                image_rotary_emb=image_rotary_emb_base,
+            )
+
+            if encoder_hidden_states_base is not None:
+                hidden_states_base, encoder_hidden_states_base = attn_output_base
+            else:
+                hidden_states_base = attn_output_base
+
+        # move regional mask to device
+        if base_ratio is not None and regional_attention_mask is not None:
+            if self.regional_mask is not None:
+                regional_mask = self.regional_mask.to(hidden_states.device)
+            else:
+                self.regional_mask = regional_attention_mask
+                regional_mask = self.regional_mask.to(hidden_states.device)
+        else:
+            regional_mask = None
+
+        attn_output = self.FluxAttnProcessor2_0_call(
+            attn=attn,
+            hidden_states=hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+            attention_mask=regional_mask,
+            image_rotary_emb=image_rotary_emb,
+        )
+
+        if encoder_hidden_states is not None:
+            hidden_states, encoder_hidden_states = attn_output
+        else:
+            hidden_states = attn_output
+
+        if encoder_hidden_states is not None:
+
+            if base_ratio is not None:
+                # merge hidden_states and hidden_states_base
+                hidden_states = hidden_states * (1 - base_ratio) + hidden_states_base * base_ratio
+                return hidden_states, encoder_hidden_states, encoder_hidden_states_base
+            else:  # both regional and base input are base prompts, skip the merge
+                return hidden_states, encoder_hidden_states, encoder_hidden_states
+
+        else:
+            if base_ratio is not None:
+
+                encoder_hidden_states, hidden_states = (
+                    hidden_states[:, : encoder_seq_len],
+                    hidden_states[:, encoder_seq_len:],
+                )
+
+                encoder_hidden_states_base, hidden_states_base = (
+                    hidden_states_base[:, : encoder_seq_len_base],
+                    hidden_states_base[:, encoder_seq_len_base:],
+                )
+
+                # merge hidden_states and hidden_states_base
+                hidden_states = hidden_states * (1 - base_ratio) + hidden_states_base * base_ratio
+
+                # concat back
+                hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
+                hidden_states_base = torch.cat([encoder_hidden_states_base, hidden_states_base], dim=1)
+
+                return hidden_states, hidden_states_base
+
+            else:  # both regional and base input are base prompts, skip the merge
+                return hidden_states, hidden_states
+
+
 class FusedFluxAttnProcessor2_0:
     """Attention processor used typically in processing the SD3-like self-attention projections."""
 
