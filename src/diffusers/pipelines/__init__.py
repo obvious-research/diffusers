@@ -138,6 +138,7 @@ else:
         "FluxInpaintPipeline",
         "FluxPipeline",
         "FluxPanoramaPipeline",
+        "FluxRegionalPipeline",
         "FluxFillPipeline",
         "FluxPriorReduxPipeline",
         "ReduxImageEncoder",
