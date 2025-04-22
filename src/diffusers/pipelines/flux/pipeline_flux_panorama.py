@@ -59,9 +59,9 @@ EXAMPLE_DOC_STRING = """
     Examples:
         ```py
         >>> import torch
-        >>> from diffusers import FluxPipeline
+        >>> from diffusers import FluxPanoramaPipeline
 
-        >>> pipe = FluxPipeline.from_pretrained("black-forest-labs/FLUX.1-schnell", torch_dtype=torch.bfloat16)
+        >>> pipe = FluxPanoramaPipeline.from_pretrained("black-forest-labs/FLUX.1-schnell", torch_dtype=torch.bfloat16)
         >>> pipe.to("cuda")
         >>> prompt = "A cat holding a sign that says hello world"
         >>> # Depending on the variant being used, the pipeline call will slightly vary.
@@ -978,6 +978,17 @@ class FluxPanoramaPipeline(
 
         self.set_progress_bar_config(position=0)
 
+        #create a weight matrix
+        smoothing = 128
+        weight_matrix = torch.ones((height_generation-smoothing, width_generation-smoothing), dtype=prompt_embeds.dtype, device=device)
+        for val  in torch.linspace(1, 0, smoothing//2, device=device):
+            weight_matrix = torch.nn.functional.pad(weight_matrix, (1, 1, 1, 1), mode='constant', value=val)
+
+        torch.set_printoptions(threshold=20_000, edgeitems=smoothing //2 + 3)
+
+        #interpolate the weight matrix
+        weight_matrix = torch.nn.functional.interpolate(weight_matrix.unsqueeze(0).unsqueeze(0), scale_factor=(1 / self.vae_scale_factor), mode='bilinear').squeeze(0).squeeze(0)
+
         # 6. Denoising loop
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
@@ -1047,7 +1058,7 @@ class FluxPanoramaPipeline(
                             noise_pred_unpacked.chunk(view_batch_size), batch_view
                     ):
                         value[:, :, h_start:h_end, w_start:w_end] += noise_pred_local
-                        count[:, :, h_start:h_end, w_start:w_end] += 1
+                        count[:, :, h_start:h_end, w_start:w_end] += weight_matrix
 
                 # Average the noise_pred using the accumulated values and counts
                 # compute the previous noisy sample x_t -> x_t-1
