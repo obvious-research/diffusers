@@ -378,6 +378,7 @@ else:
             "FluxPipeline",
             "FluxPanoramaPipeline",
             "FluxRegionalPipeline",
+            "FluxPanoramaRegionalPipeline",
             "FluxPriorReduxPipeline",
             "HiDreamImagePipeline",
             "HunyuanDiTControlNetPipeline",
