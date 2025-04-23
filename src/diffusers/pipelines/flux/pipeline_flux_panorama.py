@@ -28,6 +28,7 @@ from transformers import (
     T5TokenizerFast,
 )
 
+from .pipeline_flux import calculate_shift, retrieve_timesteps, FluxPipeline
 from ...image_processor import PipelineImageInput, VaeImageProcessor
 from ...loaders import FluxIPAdapterMixin, FluxLoraLoaderMixin, FromSingleFileMixin, TextualInversionLoaderMixin
 from ...models import AutoencoderKL, FluxTransformer2DModel
@@ -71,513 +72,7 @@ EXAMPLE_DOC_STRING = """
         ```
 """
 
-
-def calculate_shift(
-    image_seq_len,
-    base_seq_len: int = 256,
-    max_seq_len: int = 4096,
-    base_shift: float = 0.5,
-    max_shift: float = 1.15,
-):
-    m = (max_shift - base_shift) / (max_seq_len - base_seq_len)
-    b = base_shift - m * base_seq_len
-    mu = image_seq_len * m + b
-    return mu
-
-
-# Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.retrieve_timesteps
-def retrieve_timesteps(
-    scheduler,
-    num_inference_steps: Optional[int] = None,
-    device: Optional[Union[str, torch.device]] = None,
-    timesteps: Optional[List[int]] = None,
-    sigmas: Optional[List[float]] = None,
-    **kwargs,
-):
-    r"""
-    Calls the scheduler's `set_timesteps` method and retrieves timesteps from the scheduler after the call. Handles
-    custom timesteps. Any kwargs will be supplied to `scheduler.set_timesteps`.
-
-    Args:
-        scheduler (`SchedulerMixin`):
-            The scheduler to get timesteps from.
-        num_inference_steps (`int`):
-            The number of diffusion steps used when generating samples with a pre-trained model. If used, `timesteps`
-            must be `None`.
-        device (`str` or `torch.device`, *optional*):
-            The device to which the timesteps should be moved to. If `None`, the timesteps are not moved.
-        timesteps (`List[int]`, *optional*):
-            Custom timesteps used to override the timestep spacing strategy of the scheduler. If `timesteps` is passed,
-            `num_inference_steps` and `sigmas` must be `None`.
-        sigmas (`List[float]`, *optional*):
-            Custom sigmas used to override the timestep spacing strategy of the scheduler. If `sigmas` is passed,
-            `num_inference_steps` and `timesteps` must be `None`.
-
-    Returns:
-        `Tuple[torch.Tensor, int]`: A tuple where the first element is the timestep schedule from the scheduler and the
-        second element is the number of inference steps.
-    """
-    if timesteps is not None and sigmas is not None:
-        raise ValueError("Only one of `timesteps` or `sigmas` can be passed. Please choose one to set custom values")
-    if timesteps is not None:
-        accepts_timesteps = "timesteps" in set(inspect.signature(scheduler.set_timesteps).parameters.keys())
-        if not accepts_timesteps:
-            raise ValueError(
-                f"The current scheduler class {scheduler.__class__}'s `set_timesteps` does not support custom"
-                f" timestep schedules. Please check whether you are using the correct scheduler."
-            )
-        scheduler.set_timesteps(timesteps=timesteps, device=device, **kwargs)
-        timesteps = scheduler.timesteps
-        num_inference_steps = len(timesteps)
-    elif sigmas is not None:
-        accept_sigmas = "sigmas" in set(inspect.signature(scheduler.set_timesteps).parameters.keys())
-        if not accept_sigmas:
-            raise ValueError(
-                f"The current scheduler class {scheduler.__class__}'s `set_timesteps` does not support custom"
-                f" sigmas schedules. Please check whether you are using the correct scheduler."
-            )
-        scheduler.set_timesteps(sigmas=sigmas, device=device, **kwargs)
-        timesteps = scheduler.timesteps
-        num_inference_steps = len(timesteps)
-    else:
-        scheduler.set_timesteps(num_inference_steps, device=device, **kwargs)
-        timesteps = scheduler.timesteps
-    return timesteps, num_inference_steps
-
-
-class FluxPanoramaPipeline(
-    DiffusionPipeline,
-    FluxLoraLoaderMixin,
-    FromSingleFileMixin,
-    TextualInversionLoaderMixin,
-    FluxIPAdapterMixin,
-):
-    r"""
-    The Flux pipeline for text-to-image generation.
-
-    Reference: https://blackforestlabs.ai/announcing-black-forest-labs/
-
-    Args:
-        transformer ([`FluxTransformer2DModel`]):
-            Conditional Transformer (MMDiT) architecture to denoise the encoded image latents.
-        scheduler ([`FlowMatchEulerDiscreteScheduler`]):
-            A scheduler to be used in combination with `transformer` to denoise the encoded image latents.
-        vae ([`AutoencoderKL`]):
-            Variational Auto-Encoder (VAE) Model to encode and decode images to and from latent representations.
-        text_encoder ([`CLIPTextModel`]):
-            [CLIP](https://huggingface.co/docs/transformers/model_doc/clip#transformers.CLIPTextModel), specifically
-            the [clip-vit-large-patch14](https://huggingface.co/openai/clip-vit-large-patch14) variant.
-        text_encoder_2 ([`T5EncoderModel`]):
-            [T5](https://huggingface.co/docs/transformers/en/model_doc/t5#transformers.T5EncoderModel), specifically
-            the [google/t5-v1_1-xxl](https://huggingface.co/google/t5-v1_1-xxl) variant.
-        tokenizer (`CLIPTokenizer`):
-            Tokenizer of class
-            [CLIPTokenizer](https://huggingface.co/docs/transformers/en/model_doc/clip#transformers.CLIPTokenizer).
-        tokenizer_2 (`T5TokenizerFast`):
-            Second Tokenizer of class
-            [T5TokenizerFast](https://huggingface.co/docs/transformers/en/model_doc/t5#transformers.T5TokenizerFast).
-    """
-
-    model_cpu_offload_seq = "text_encoder->text_encoder_2->image_encoder->transformer->vae"
-    _optional_components = ["image_encoder", "feature_extractor"]
-    _callback_tensor_inputs = ["latents", "prompt_embeds"]
-
-    def __init__(
-        self,
-        scheduler: FlowMatchEulerDiscreteScheduler,
-        vae: AutoencoderKL,
-        text_encoder: CLIPTextModel,
-        tokenizer: CLIPTokenizer,
-        text_encoder_2: T5EncoderModel,
-        tokenizer_2: T5TokenizerFast,
-        transformer: FluxTransformer2DModel,
-        image_encoder: CLIPVisionModelWithProjection = None,
-        feature_extractor: CLIPImageProcessor = None,
-    ):
-        super().__init__()
-
-        self.register_modules(
-            vae=vae,
-            text_encoder=text_encoder,
-            text_encoder_2=text_encoder_2,
-            tokenizer=tokenizer,
-            tokenizer_2=tokenizer_2,
-            transformer=transformer,
-            scheduler=scheduler,
-            image_encoder=image_encoder,
-            feature_extractor=feature_extractor,
-        )
-        self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1) if getattr(self, "vae", None) else 8
-        # Flux latents are turned into 2x2 patches and packed. This means the latent width and height has to be divisible
-        # by the patch size. So the vae scale factor is multiplied by the patch size to account for this
-        self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor * 2)
-        self.tokenizer_max_length = (
-            self.tokenizer.model_max_length if hasattr(self, "tokenizer") and self.tokenizer is not None else 77
-        )
-        self.default_sample_size = 128
-
-    def _get_t5_prompt_embeds(
-        self,
-        prompt: Union[str, List[str]] = None,
-        num_images_per_prompt: int = 1,
-        max_sequence_length: int = 512,
-        device: Optional[torch.device] = None,
-        dtype: Optional[torch.dtype] = None,
-    ):
-        device = device or self._execution_device
-        dtype = dtype or self.text_encoder.dtype
-
-        prompt = [prompt] if isinstance(prompt, str) else prompt
-        batch_size = len(prompt)
-
-        if isinstance(self, TextualInversionLoaderMixin):
-            prompt = self.maybe_convert_prompt(prompt, self.tokenizer_2)
-
-        text_inputs = self.tokenizer_2(
-            prompt,
-            padding="max_length",
-            max_length=max_sequence_length,
-            truncation=True,
-            return_length=False,
-            return_overflowing_tokens=False,
-            return_tensors="pt",
-        )
-        text_input_ids = text_inputs.input_ids
-        untruncated_ids = self.tokenizer_2(prompt, padding="longest", return_tensors="pt").input_ids
-
-        if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not torch.equal(text_input_ids, untruncated_ids):
-            removed_text = self.tokenizer_2.batch_decode(untruncated_ids[:, self.tokenizer_max_length - 1 : -1])
-            logger.warning(
-                "The following part of your input was truncated because `max_sequence_length` is set to "
-                f" {max_sequence_length} tokens: {removed_text}"
-            )
-
-        prompt_embeds = self.text_encoder_2(text_input_ids.to(device), output_hidden_states=False)[0]
-
-        dtype = self.text_encoder_2.dtype
-        prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
-
-        _, seq_len, _ = prompt_embeds.shape
-
-        # duplicate text embeddings and attention mask for each generation per prompt, using mps friendly method
-        prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
-        prompt_embeds = prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
-
-        return prompt_embeds
-
-    def _get_clip_prompt_embeds(
-        self,
-        prompt: Union[str, List[str]],
-        num_images_per_prompt: int = 1,
-        device: Optional[torch.device] = None,
-    ):
-        device = device or self._execution_device
-
-        prompt = [prompt] if isinstance(prompt, str) else prompt
-        batch_size = len(prompt)
-
-        if isinstance(self, TextualInversionLoaderMixin):
-            prompt = self.maybe_convert_prompt(prompt, self.tokenizer)
-
-        text_inputs = self.tokenizer(
-            prompt,
-            padding="max_length",
-            max_length=self.tokenizer_max_length,
-            truncation=True,
-            return_overflowing_tokens=False,
-            return_length=False,
-            return_tensors="pt",
-        )
-
-        text_input_ids = text_inputs.input_ids
-        untruncated_ids = self.tokenizer(prompt, padding="longest", return_tensors="pt").input_ids
-        if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not torch.equal(text_input_ids, untruncated_ids):
-            removed_text = self.tokenizer.batch_decode(untruncated_ids[:, self.tokenizer_max_length - 1 : -1])
-            logger.warning(
-                "The following part of your input was truncated because CLIP can only handle sequences up to"
-                f" {self.tokenizer_max_length} tokens: {removed_text}"
-            )
-        prompt_embeds = self.text_encoder(text_input_ids.to(device), output_hidden_states=False)
-
-        # Use pooled output of CLIPTextModel
-        prompt_embeds = prompt_embeds.pooler_output
-        prompt_embeds = prompt_embeds.to(dtype=self.text_encoder.dtype, device=device)
-
-        # duplicate text embeddings for each generation per prompt, using mps friendly method
-        prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt)
-        prompt_embeds = prompt_embeds.view(batch_size * num_images_per_prompt, -1)
-
-        return prompt_embeds
-
-    def encode_prompt(
-        self,
-        prompt: Union[str, List[str]],
-        prompt_2: Union[str, List[str]],
-        device: Optional[torch.device] = None,
-        num_images_per_prompt: int = 1,
-        prompt_embeds: Optional[torch.FloatTensor] = None,
-        pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
-        max_sequence_length: int = 512,
-        lora_scale: Optional[float] = None,
-    ):
-        r"""
-
-        Args:
-            prompt (`str` or `List[str]`, *optional*):
-                prompt to be encoded
-            prompt_2 (`str` or `List[str]`, *optional*):
-                The prompt or prompts to be sent to the `tokenizer_2` and `text_encoder_2`. If not defined, `prompt` is
-                used in all text-encoders
-            device: (`torch.device`):
-                torch device
-            num_images_per_prompt (`int`):
-                number of images that should be generated per prompt
-            prompt_embeds (`torch.FloatTensor`, *optional*):
-                Pre-generated text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt weighting. If not
-                provided, text embeddings will be generated from `prompt` input argument.
-            pooled_prompt_embeds (`torch.FloatTensor`, *optional*):
-                Pre-generated pooled text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt weighting.
-                If not provided, pooled text embeddings will be generated from `prompt` input argument.
-            lora_scale (`float`, *optional*):
-                A lora scale that will be applied to all LoRA layers of the text encoder if LoRA layers are loaded.
-        """
-        device = device or self._execution_device
-
-        # set lora scale so that monkey patched LoRA
-        # function of text encoder can correctly access it
-        if lora_scale is not None and isinstance(self, FluxLoraLoaderMixin):
-            self._lora_scale = lora_scale
-
-            # dynamically adjust the LoRA scale
-            if self.text_encoder is not None and USE_PEFT_BACKEND:
-                scale_lora_layers(self.text_encoder, lora_scale)
-            if self.text_encoder_2 is not None and USE_PEFT_BACKEND:
-                scale_lora_layers(self.text_encoder_2, lora_scale)
-
-        prompt = [prompt] if isinstance(prompt, str) else prompt
-
-        if prompt_embeds is None:
-            prompt_2 = prompt_2 or prompt
-            prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
-
-            # We only use the pooled prompt output from the CLIPTextModel
-            pooled_prompt_embeds = self._get_clip_prompt_embeds(
-                prompt=prompt,
-                device=device,
-                num_images_per_prompt=num_images_per_prompt,
-            )
-            prompt_embeds = self._get_t5_prompt_embeds(
-                prompt=prompt_2,
-                num_images_per_prompt=num_images_per_prompt,
-                max_sequence_length=max_sequence_length,
-                device=device,
-            )
-
-        if self.text_encoder is not None:
-            if isinstance(self, FluxLoraLoaderMixin) and USE_PEFT_BACKEND:
-                # Retrieve the original scale by scaling back the LoRA layers
-                unscale_lora_layers(self.text_encoder, lora_scale)
-
-        if self.text_encoder_2 is not None:
-            if isinstance(self, FluxLoraLoaderMixin) and USE_PEFT_BACKEND:
-                # Retrieve the original scale by scaling back the LoRA layers
-                unscale_lora_layers(self.text_encoder_2, lora_scale)
-
-        dtype = self.text_encoder.dtype if self.text_encoder is not None else self.transformer.dtype
-        text_ids = torch.zeros(prompt_embeds.shape[1], 3).to(device=device, dtype=dtype)
-
-        return prompt_embeds, pooled_prompt_embeds, text_ids
-
-    def encode_image(self, image, device, num_images_per_prompt):
-        dtype = next(self.image_encoder.parameters()).dtype
-
-        if not isinstance(image, torch.Tensor):
-            image = self.feature_extractor(image, return_tensors="pt").pixel_values
-
-        image = image.to(device=device, dtype=dtype)
-        image_embeds = self.image_encoder(image).image_embeds
-        image_embeds = image_embeds.repeat_interleave(num_images_per_prompt, dim=0)
-        return image_embeds
-
-    def prepare_ip_adapter_image_embeds(
-        self, ip_adapter_image, ip_adapter_image_embeds, device, num_images_per_prompt
-    ):
-        image_embeds = []
-        if ip_adapter_image_embeds is None:
-            if not isinstance(ip_adapter_image, list):
-                ip_adapter_image = [ip_adapter_image]
-
-            if len(ip_adapter_image) != self.transformer.encoder_hid_proj.num_ip_adapters:
-                raise ValueError(
-                    f"`ip_adapter_image` must have same length as the number of IP Adapters. Got {len(ip_adapter_image)} images and {self.transformer.encoder_hid_proj.num_ip_adapters} IP Adapters."
-                )
-
-            for single_ip_adapter_image in ip_adapter_image:
-                single_image_embeds = self.encode_image(single_ip_adapter_image, device, 1)
-                image_embeds.append(single_image_embeds[None, :])
-        else:
-            if not isinstance(ip_adapter_image_embeds, list):
-                ip_adapter_image_embeds = [ip_adapter_image_embeds]
-
-            if len(ip_adapter_image_embeds) != self.transformer.encoder_hid_proj.num_ip_adapters:
-                raise ValueError(
-                    f"`ip_adapter_image_embeds` must have same length as the number of IP Adapters. Got {len(ip_adapter_image_embeds)} image embeds and {self.transformer.encoder_hid_proj.num_ip_adapters} IP Adapters."
-                )
-
-            for single_image_embeds in ip_adapter_image_embeds:
-                image_embeds.append(single_image_embeds)
-
-        ip_adapter_image_embeds = []
-        for single_image_embeds in image_embeds:
-            single_image_embeds = torch.cat([single_image_embeds] * num_images_per_prompt, dim=0)
-            single_image_embeds = single_image_embeds.to(device=device)
-            ip_adapter_image_embeds.append(single_image_embeds)
-
-        return ip_adapter_image_embeds
-
-    def check_inputs(
-        self,
-        prompt,
-        prompt_2,
-        height,
-        width,
-        negative_prompt=None,
-        negative_prompt_2=None,
-        prompt_embeds=None,
-        negative_prompt_embeds=None,
-        pooled_prompt_embeds=None,
-        negative_pooled_prompt_embeds=None,
-        callback_on_step_end_tensor_inputs=None,
-        max_sequence_length=None,
-    ):
-        if height % (self.vae_scale_factor * 2) != 0 or width % (self.vae_scale_factor * 2) != 0:
-            logger.warning(
-                f"`height` and `width` have to be divisible by {self.vae_scale_factor * 2} but are {height} and {width}. Dimensions will be resized accordingly"
-            )
-
-        if callback_on_step_end_tensor_inputs is not None and not all(
-            k in self._callback_tensor_inputs for k in callback_on_step_end_tensor_inputs
-        ):
-            raise ValueError(
-                f"`callback_on_step_end_tensor_inputs` has to be in {self._callback_tensor_inputs}, but found {[k for k in callback_on_step_end_tensor_inputs if k not in self._callback_tensor_inputs]}"
-            )
-
-        if prompt is not None and prompt_embeds is not None:
-            raise ValueError(
-                f"Cannot forward both `prompt`: {prompt} and `prompt_embeds`: {prompt_embeds}. Please make sure to"
-                " only forward one of the two."
-            )
-        elif prompt_2 is not None and prompt_embeds is not None:
-            raise ValueError(
-                f"Cannot forward both `prompt_2`: {prompt_2} and `prompt_embeds`: {prompt_embeds}. Please make sure to"
-                " only forward one of the two."
-            )
-        elif prompt is None and prompt_embeds is None:
-            raise ValueError(
-                "Provide either `prompt` or `prompt_embeds`. Cannot leave both `prompt` and `prompt_embeds` undefined."
-            )
-        elif prompt is not None and (not isinstance(prompt, str) and not isinstance(prompt, list)):
-            raise ValueError(f"`prompt` has to be of type `str` or `list` but is {type(prompt)}")
-        elif prompt_2 is not None and (not isinstance(prompt_2, str) and not isinstance(prompt_2, list)):
-            raise ValueError(f"`prompt_2` has to be of type `str` or `list` but is {type(prompt_2)}")
-
-        if negative_prompt is not None and negative_prompt_embeds is not None:
-            raise ValueError(
-                f"Cannot forward both `negative_prompt`: {negative_prompt} and `negative_prompt_embeds`:"
-                f" {negative_prompt_embeds}. Please make sure to only forward one of the two."
-            )
-        elif negative_prompt_2 is not None and negative_prompt_embeds is not None:
-            raise ValueError(
-                f"Cannot forward both `negative_prompt_2`: {negative_prompt_2} and `negative_prompt_embeds`:"
-                f" {negative_prompt_embeds}. Please make sure to only forward one of the two."
-            )
-
-        if prompt_embeds is not None and negative_prompt_embeds is not None:
-            if prompt_embeds.shape != negative_prompt_embeds.shape:
-                raise ValueError(
-                    "`prompt_embeds` and `negative_prompt_embeds` must have the same shape when passed directly, but"
-                    f" got: `prompt_embeds` {prompt_embeds.shape} != `negative_prompt_embeds`"
-                    f" {negative_prompt_embeds.shape}."
-                )
-
-        if prompt_embeds is not None and pooled_prompt_embeds is None:
-            raise ValueError(
-                "If `prompt_embeds` are provided, `pooled_prompt_embeds` also have to be passed. Make sure to generate `pooled_prompt_embeds` from the same text encoder that was used to generate `prompt_embeds`."
-            )
-        if negative_prompt_embeds is not None and negative_pooled_prompt_embeds is None:
-            raise ValueError(
-                "If `negative_prompt_embeds` are provided, `negative_pooled_prompt_embeds` also have to be passed. Make sure to generate `negative_pooled_prompt_embeds` from the same text encoder that was used to generate `negative_prompt_embeds`."
-            )
-
-        if max_sequence_length is not None and max_sequence_length > 512:
-            raise ValueError(f"`max_sequence_length` cannot be greater than 512 but is {max_sequence_length}")
-
-    @staticmethod
-    def _prepare_latent_image_ids(batch_size, height, width, device, dtype):
-        latent_image_ids = torch.zeros(height, width, 3)
-        latent_image_ids[..., 1] = latent_image_ids[..., 1] + torch.arange(height)[:, None]
-        latent_image_ids[..., 2] = latent_image_ids[..., 2] + torch.arange(width)[None, :]
-
-        latent_image_id_height, latent_image_id_width, latent_image_id_channels = latent_image_ids.shape
-
-        latent_image_ids = latent_image_ids.reshape(
-            latent_image_id_height * latent_image_id_width, latent_image_id_channels
-        )
-
-        return latent_image_ids.to(device=device, dtype=dtype)
-
-    @staticmethod
-    def _pack_latents(latents, batch_size, num_channels_latents, height, width):
-        latents = latents.view(batch_size, num_channels_latents, height // 2, 2, width // 2, 2)
-        latents = latents.permute(0, 2, 4, 1, 3, 5)
-        latents = latents.reshape(batch_size, (height // 2) * (width // 2), num_channels_latents * 4)
-
-        return latents
-
-    @staticmethod
-    def _unpack_latents(latents, height, width, vae_scale_factor):
-        batch_size, num_patches, channels = latents.shape
-
-        # VAE applies 8x compression on images but we must also account for packing which requires
-        # latent height and width to be divisible by 2.
-        height = 2 * (int(height) // (vae_scale_factor * 2))
-        width = 2 * (int(width) // (vae_scale_factor * 2))
-
-        latents = latents.view(batch_size, height // 2, width // 2, channels // 4, 2, 2)
-        latents = latents.permute(0, 3, 1, 4, 2, 5)
-
-        latents = latents.reshape(batch_size, channels // (2 * 2), height, width)
-
-        return latents
-
-    def enable_vae_slicing(self):
-        r"""
-        Enable sliced VAE decoding. When this option is enabled, the VAE will split the input tensor in slices to
-        compute decoding in several steps. This is useful to save some memory and allow larger batch sizes.
-        """
-        self.vae.enable_slicing()
-
-    def disable_vae_slicing(self):
-        r"""
-        Disable sliced VAE decoding. If `enable_vae_slicing` was previously enabled, this method will go back to
-        computing decoding in one step.
-        """
-        self.vae.disable_slicing()
-
-    def enable_vae_tiling(self):
-        r"""
-        Enable tiled VAE decoding. When this option is enabled, the VAE will split the input tensor into tiles to
-        compute decoding and encoding in several steps. This is useful for saving a large amount of memory and to allow
-        processing larger images.
-        """
-        self.vae.enable_tiling()
-
-    def disable_vae_tiling(self):
-        r"""
-        Disable tiled VAE decoding. If `enable_vae_tiling` was previously enabled, this method will go back to
-        computing decoding in one step.
-        """
-        self.vae.disable_tiling()
+class FluxPanoramaPipeline(FluxPipeline):
 
     def prepare_latents(
         self,
@@ -592,7 +87,6 @@ class FluxPanoramaPipeline(
     ):
         # VAE applies 8x compression on images but we must also account for packing which requires
         # latent height and width to be divisible by 2.
-
         height = 2 * (int(height) // (self.vae_scale_factor * 2))
         width = 2 * (int(width) // (self.vae_scale_factor * 2))
 
@@ -612,25 +106,6 @@ class FluxPanoramaPipeline(
 
         return latents
 
-    @property
-    def guidance_scale(self):
-        return self._guidance_scale
-
-    @property
-    def joint_attention_kwargs(self):
-        return self._joint_attention_kwargs
-
-    @property
-    def num_timesteps(self):
-        return self._num_timesteps
-
-    @property
-    def current_timestep(self):
-        return self._current_timestep
-
-    @property
-    def interrupt(self):
-        return self._interrupt
 
     def get_views(
             self,
@@ -639,7 +114,7 @@ class FluxPanoramaPipeline(
             window_size_height: int = 64,
             window_size_width: int = 64,
             stride: int = 32,
-    ) -> Union[List[Tuple[int, int, int, int]], Tuple[List[Tuple[int, int, int, int]], List[torch.Tensor]]]:
+    ) -> List[Tuple[int, int, int, int]]:
         """
         Generates a list of views based on the given parameters. Here, we define the mappings F_i (see Eq. 7 in the
         MultiDiffusion paper https://arxiv.org/abs/2302.08113).
@@ -649,22 +124,13 @@ class FluxPanoramaPipeline(
             panorama_width (int): The width of the panorama.
             window_size (int, optional): The size of the window in latent space. Defaults to 64.
             stride (int, optional): The stride value in latent space. Defaults to 8.
-            canny_image (torch.Tensor, optional): If provided, will also return canny image views.
 
         Returns:
-            If canny_image is None:
-                List[Tuple[int, int, int, int]]: A list of tuples representing the latent views.
-            If canny_image is provided:
-                Tuple[List[Tuple[int, int, int, int]], List[torch.Tensor]]: A tuple containing:
-                    - List of tuples representing the latent views
-                    - List of tensor views from the canny image
+            List[Tuple[int, int, int, int]]: A list of tuples representing the latent views.
         """
-        # Get latent space views
-        latent_h = panorama_height // 8
-        latent_w = panorama_width // 8
 
-        num_blocks_height = (latent_h - window_size_height) // stride + 1 if latent_h > window_size_height else 1
-        num_blocks_width = (latent_w - window_size_width) // stride + 1 if latent_w > window_size_width else 1
+        num_blocks_height = (panorama_height - window_size_height) // stride + 1 if panorama_height > window_size_height else 1
+        num_blocks_width = (panorama_width - window_size_width) // stride + 1 if panorama_width > window_size_width else 1
 
         total_num_blocks = int(num_blocks_height * num_blocks_width)
         latent_views = []
@@ -957,7 +423,7 @@ class FluxPanoramaPipeline(
             )
 
         latent_views = self.get_views(
-            height, width,
+            height // self.vae_scale_factor , width // self.vae_scale_factor,
             window_size_height=height_generation // self.vae_scale_factor,
             window_size_width=width_generation // self.vae_scale_factor,
             stride=stride // self.vae_scale_factor,
@@ -971,23 +437,14 @@ class FluxPanoramaPipeline(
             prompt_embeds.dtype)
 
         views_batch = [latent_views[i: i + view_batch_size] for i in range(0, len(latent_views), view_batch_size)]
-        views_scheduler_status = [copy.deepcopy(self.scheduler.__dict__)] * len(views_batch)
 
         count = torch.zeros_like(latents)  # Tracks number of views for each latent position
         value = torch.zeros_like(latents)  # Accumulates the latent values for averaging
 
         self.set_progress_bar_config(position=0)
 
-        #create a weight matrix
-        smoothing = 128
-        weight_matrix = torch.ones((height_generation-smoothing, width_generation-smoothing), dtype=prompt_embeds.dtype, device=device)
-        for val  in torch.linspace(1, 0, smoothing//2, device=device):
-            weight_matrix = torch.nn.functional.pad(weight_matrix, (1, 1, 1, 1), mode='constant', value=val)
-
-        torch.set_printoptions(threshold=20_000, edgeitems=smoothing //2 + 3)
-
-        #interpolate the weight matrix
-        weight_matrix = torch.nn.functional.interpolate(weight_matrix.unsqueeze(0).unsqueeze(0), scale_factor=(1 / self.vae_scale_factor), mode='bilinear').squeeze(0).squeeze(0)
+        # TODO: better weight matrix
+        weight_matrix = 1
 
         # 6. Denoising loop
         with self.progress_bar(total=num_inference_steps) as progress_bar:
