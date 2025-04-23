@@ -2470,7 +2470,6 @@ class FluxAttnProcessor2_0_NPU:
 
 class RegionalFluxAttnProcessor2_0:
     def __init__(self):
-        self.regional_mask = None
         self.FluxAttnProcessor2_0_call = FluxAttnProcessor2_0().__call__
 
     def __call__(
@@ -2505,11 +2504,7 @@ class RegionalFluxAttnProcessor2_0:
 
         # move regional mask to device
         if base_ratio is not None and regional_attention_mask is not None:
-            if self.regional_mask is not None:
-                regional_mask = self.regional_mask.to(hidden_states.device)
-            else:
-                self.regional_mask = regional_attention_mask
-                regional_mask = self.regional_mask.to(hidden_states.device)
+            regional_mask = regional_attention_mask.to(hidden_states.device)
         else:
             regional_mask = None
 
