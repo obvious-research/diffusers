@@ -26,6 +26,7 @@ else:
     _import_structure["pipeline_flux"] = ["FluxPipeline"]
     _import_structure["pipeline_flux_panorama"] = ["FluxPanoramaPipeline"]
     _import_structure["pipeline_flux_regional"] = ["FluxRegionalPipeline"]
+    _import_structure["pipeline_flux_panorama_regional"] = ["FluxPanoramaRegionalPipeline"]
     _import_structure["pipeline_flux_control"] = ["FluxControlPipeline"]
     _import_structure["pipeline_flux_control_img2img"] = ["FluxControlImg2ImgPipeline"]
     _import_structure["pipeline_flux_control_inpaint"] = ["FluxControlInpaintPipeline"]
