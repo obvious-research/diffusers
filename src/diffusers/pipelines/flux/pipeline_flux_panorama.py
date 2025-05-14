@@ -16,6 +16,9 @@ import copy
 import inspect
 from typing import Any, Callable, Dict, List, Optional, Union, Tuple
 
+import itertools
+import math
+
 import numpy as np
 import torch
 import tqdm
@@ -72,7 +75,63 @@ EXAMPLE_DOC_STRING = """
         ```
 """
 
+class TBLR:
+
+    def __init__(self, top, bottom, left, right):
+        self.top = top
+        self.bottom = bottom
+        self.left = left
+        self.right = right
+
+    def __eq__(self, other):
+        return (
+            self.top == other.top
+            and self.bottom == other.bottom
+            and self.left == other.left
+            and self.right == other.right
+        )
+
+
+class Tile:
+
+    def __init__(self, coords: TBLR, overlap: TBLR, weight=None):
+        self.coords = coords
+        self.overlap = overlap
+        self.weight = weight
+
+    @property
+    def height(self):
+        return self.coords.bottom - self.coords.top
+
+    @property
+    def width(self):
+        return self.coords.right - self.coords.left
+
+    def __eq__(self, other):
+        return self.coords == other.coords and self.overlap == other.overlap and self.weight == other.weight
+
+
 class FluxPanoramaPipeline(FluxPipeline):
+
+    @staticmethod
+    def generate_weight_matrix(tile: Tile, device: torch.device):
+
+        weight_matrix = torch.ones((tile.height, tile.width), device=device)
+
+        if tile.overlap.left > 0:
+            gradient_left = torch.linspace(0, 1, tile.overlap.left, device=device)
+            weight_matrix[:, :tile.overlap.left] *= gradient_left.view(1, -1)
+        if tile.overlap.top > 0:
+            gradient_top = torch.linspace(0, 1, tile.overlap.top, device=device)
+            weight_matrix[:tile.overlap.top, :] *= gradient_top.view(-1, 1)
+        if tile.overlap.right > 0:
+            gradient_right = torch.linspace(1, 0, tile.overlap.right, device=device)
+            weight_matrix[:, -tile.overlap.right:] *= gradient_right.view(1, -1)
+        if tile.overlap.bottom > 0:
+            gradient_bottom = torch.linspace(1, 0, tile.overlap.bottom, device=device)
+            weight_matrix[-tile.overlap.bottom:, :] *= gradient_bottom.view(-1, 1)
+
+        return weight_matrix
 
     def prepare_latents(
         self,
@@ -106,44 +165,106 @@ class FluxPanoramaPipeline(FluxPipeline):
 
         return latents
 
-
-    def get_views(
-            self,
-            panorama_height: int,
-            panorama_width: int,
-            window_size_height: int = 64,
-            window_size_width: int = 64,
-            stride: int = 32,
-    ) -> List[Tuple[int, int, int, int]]:
-        """
-        Generates a list of views based on the given parameters. Here, we define the mappings F_i (see Eq. 7 in the
-        MultiDiffusion paper https://arxiv.org/abs/2302.08113).
+    @staticmethod
+    def calc_overlap(tiles: list[Tile], num_tiles_x: int, num_tiles_y: int) -> list[Tile]:
+        """Calculate and update the overlap of a list of tiles.
 
         Args:
-            panorama_height (int): The height of the panorama.
-            panorama_width (int): The width of the panorama.
-            window_size (int, optional): The size of the window in latent space. Defaults to 64.
-            stride (int, optional): The stride value in latent space. Defaults to 8.
-
-        Returns:
-            List[Tuple[int, int, int, int]]: A list of tuples representing the latent views.
+            tiles (list[Tile]): The list of tiles describing the locations of the respective `tile_images`.
+            num_tiles_x: the number of tiles on the x axis.
+            num_tiles_y: the number of tiles on the y axis.
         """
 
-        num_blocks_height = (panorama_height - window_size_height) // stride + 1 if panorama_height > window_size_height else 1
-        num_blocks_width = (panorama_width - window_size_width) // stride + 1 if panorama_width > window_size_width else 1
+        def get_tile_or_none(idx_y: int, idx_x: int) -> Union[Tile, None]:
+            if idx_y < 0 or idx_y > num_tiles_y or idx_x < 0 or idx_x > num_tiles_x:
+                return None
+            return tiles[idx_y * num_tiles_x + idx_x]
 
-        total_num_blocks = int(num_blocks_height * num_blocks_width)
-        latent_views = []
+        for tile_idx_y in range(num_tiles_y):
+            for tile_idx_x in range(num_tiles_x):
+                cur_tile = get_tile_or_none(tile_idx_y, tile_idx_x)
+                top_neighbor_tile = get_tile_or_none(tile_idx_y - 1, tile_idx_x)
+                left_neighbor_tile = get_tile_or_none(tile_idx_y, tile_idx_x - 1)
 
-        for i in range(total_num_blocks):
-            # Calculate latent view coordinates
-            h_start = int((i // num_blocks_width) * stride)
-            h_end = h_start + window_size_height
-            w_start = int((i % num_blocks_width) * stride)
-            w_end = w_start + window_size_width
-            latent_views.append((h_start, h_end, w_start, w_end))
+                assert cur_tile is not None
 
-        return latent_views
+                # Update cur_tile top-overlap and corresponding top-neighbor bottom-overlap.
+                if top_neighbor_tile is not None:
+                    cur_tile.overlap.top = max(0, top_neighbor_tile.coords.bottom - cur_tile.coords.top)
+                    top_neighbor_tile.overlap.bottom = cur_tile.overlap.top
+
+                # Update cur_tile left-overlap and corresponding left-neighbor right-overlap.
+                if left_neighbor_tile is not None:
+                    cur_tile.overlap.left = max(0, left_neighbor_tile.coords.right - cur_tile.coords.left)
+                    left_neighbor_tile.overlap.right = cur_tile.overlap.left
+        return tiles
+
+    def calc_tiles_min_overlap(
+            self,
+            image_height: int,
+            image_width: int,
+            tile_height: int,
+            tile_width: int,
+            min_overlap_x: int = 0,
+            min_overlap_y: int = 0,
+            add_weight_matrix: bool = True,
+    ) -> list[Tile]:
+        """Calculate the tile coordinates for a given image shape under a simple tiling scheme with overlaps.
+
+        Args:
+            image_height (int): The image height in px.
+            image_width (int): The image width in px.
+            tile_height (int): The tile height in px. All tiles will have this height.
+            tile_width (int): The tile width in px. All tiles will have this width.
+            min_overlap_x (int): The target minimum overlap between adjacent tiles. If the tiles do not evenly cover the image
+                shape, then the overlap will be spread between the tiles.
+            min_overlap_y (int): The target minimum overlap between adjacent tiles. If the tiles do not evenly cover the image
+                shape, then the overlap will be spread between the tiles.
+
+        Returns:
+            list[Tile]: A list of tiles that cover the image shape. Ordered from left-to-right, top-to-bottom.
+        """
+
+        assert min_overlap_y < tile_height
+        assert min_overlap_x < tile_width
+
+        # catches the cases when the tile size is larger than the images size and adjusts the tile size
+        if image_width < tile_width:
+            tile_width = image_width
+
+        if image_height < tile_height:
+            tile_height = image_height
+
+        num_tiles_x = math.ceil((image_width - min_overlap_x) / (tile_width - min_overlap_x))
+        num_tiles_y = math.ceil((image_height - min_overlap_y) / (tile_height - min_overlap_y))
+
+        # tiles[y * num_tiles_x + x] is the tile for the y'th row, x'th column.
+        tiles: list[Tile] = []
+
+        # Calculate tile coordinates. (Ignore overlap values for now.)
+        for tile_idx_y in range(num_tiles_y):
+            top = (tile_idx_y * (image_height - tile_height)) // (num_tiles_y - 1) if num_tiles_y > 1 else 0
+            bottom = top + tile_height
+
+            for tile_idx_x in range(num_tiles_x):
+                left = (tile_idx_x * (image_width - tile_width)) // (num_tiles_x - 1) if num_tiles_x > 1 else 0
+                right = left + tile_width
+
+                tile = Tile(
+                    coords=TBLR(top=top, bottom=bottom, left=left, right=right),
+                    overlap=TBLR(top=0, bottom=0, left=0, right=0),
+                )
+
+                tiles.append(tile)
+
+        tiles = self.calc_overlap(tiles, num_tiles_x, num_tiles_y)
+
+        # Generate the Cartesian product
+        if add_weight_matrix:
+            for tile in tiles:
+                tile.weight = self.generate_weight_matrix(tile, device=self._execution_device)
+
+        return tiles
 
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
@@ -158,7 +279,8 @@ class FluxPanoramaPipeline(FluxPipeline):
         width: Optional[int] = None,
         num_inference_steps: int = 28,
         view_batch_size: Optional[int] = 1,
-        stride: Optional[int] = 128,
+        min_overlap_x: Optional[int] = 128,
+        min_overlap_y: Optional[int] = 128,
         height_generation: Optional[int] = 1024,
         width_generation: Optional[int] = 1024,
         sigmas: Optional[List[float]] = None,
@@ -422,12 +544,15 @@ class FluxPanoramaPipeline(FluxPipeline):
                 batch_size * num_images_per_prompt,
             )
 
-        latent_views = self.get_views(
-            height // self.vae_scale_factor , width // self.vae_scale_factor,
-            window_size_height=height_generation // self.vae_scale_factor,
-            window_size_width=width_generation // self.vae_scale_factor,
-            stride=stride // self.vae_scale_factor,
+        latent_views = self.calc_tiles_min_overlap(
+            height // self.vae_scale_factor, width // self.vae_scale_factor,
+            tile_height=height_generation // self.vae_scale_factor,
+            tile_width=width_generation // self.vae_scale_factor,
+            min_overlap_x=min_overlap_x // self.vae_scale_factor,
+            min_overlap_y=min_overlap_y // self.vae_scale_factor
         )
+
+        print('Number of views per diffusion step: ', len(latent_views))
 
         latent_image_ids = self._prepare_latent_image_ids(
             batch_size,
@@ -442,9 +567,6 @@ class FluxPanoramaPipeline(FluxPipeline):
         value = torch.zeros_like(latents)  # Accumulates the latent values for averaging
 
         self.set_progress_bar_config(position=0)
-
-        # TODO: better weight matrix
-        weight_matrix = 1
 
         # 6. Denoising loop
         with self.progress_bar(total=num_inference_steps) as progress_bar:
@@ -464,8 +586,8 @@ class FluxPanoramaPipeline(FluxPipeline):
                     # Get latents for the current views
                     latents_for_view = torch.cat(
                         [
-                            latents[:, :, h_start:h_end, w_start:w_end]
-                            for h_start, h_end, w_start, w_end in batch_view
+                            latents[:, :, tile.coords.top:tile.coords.bottom, tile.coords.left:tile.coords.right]
+                            for tile in batch_view
                         ]
                     )
 
@@ -511,11 +633,11 @@ class FluxPanoramaPipeline(FluxPipeline):
                         noise_pred = neg_noise_pred + true_cfg_scale * (noise_pred - neg_noise_pred)
                     noise_pred_unpacked = self._unpack_latents(noise_pred, height_generation, width_generation, self.vae_scale_factor)
                     # Accumulate the denoised results for each view
-                    for noise_pred_local, (h_start, h_end, w_start, w_end) in zip(
+                    for noise_pred_local, tile in zip(
                             noise_pred_unpacked.chunk(view_batch_size), batch_view
                     ):
-                        value[:, :, h_start:h_end, w_start:w_end] += noise_pred_local
-                        count[:, :, h_start:h_end, w_start:w_end] += weight_matrix
+                        value[:, :, tile.coords.top:tile.coords.bottom, tile.coords.left:tile.coords.right] += noise_pred_local * tile.weight
+                        count[:, :, tile.coords.top:tile.coords.bottom, tile.coords.left:tile.coords.right] += tile.weight
 
                 # Average the noise_pred using the accumulated values and counts
                 # compute the previous noisy sample x_t -> x_t-1
