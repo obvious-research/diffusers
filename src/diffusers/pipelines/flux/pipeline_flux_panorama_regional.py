@@ -110,7 +110,8 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
         height: Optional[int] = None,
         width: Optional[int] = None,
         num_inference_steps: int = 28,
-        stride: Optional[int] = 128,
+        min_overlap_x: Optional[int] = 128,
+        min_overlap_y: Optional[int] = 128,
         height_generation: Optional[int] = 1024,
         width_generation: Optional[int] = 1024,
         sigmas: Optional[List[float]] = None,
@@ -290,11 +291,12 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
                 batch_size * num_images_per_prompt,
             )
 
-        latent_views = self.get_views(
+        latent_views = self.calc_tiles_min_overlap(
             height // self.vae_scale_factor, width // self.vae_scale_factor,
-            window_size_height=height_generation // self.vae_scale_factor,
-            window_size_width=width_generation // self.vae_scale_factor,
-            stride=stride // self.vae_scale_factor,
+            tile_height=height_generation // self.vae_scale_factor,
+            tile_width=width_generation // self.vae_scale_factor,
+            min_overlap_x=min_overlap_x // self.vae_scale_factor,
+            min_overlap_y=min_overlap_y // self.vae_scale_factor,
         )
 
         latent_image_ids = self._prepare_latent_image_ids(
@@ -305,9 +307,6 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
             prompt_embeds.dtype
         )
 
-        # TODO: better weight matrix
-        weight_matrix = 1
-
         count = torch.zeros_like(latents)  # Tracks number of views for each latent position
         value = torch.zeros_like(latents)  # Accumulates the latent values for averaging
 
@@ -316,12 +315,15 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
         # TODO: split by regional_area  and compute mask for each area
         if regional_area is not None and regional_prompts is not None:
 
-            regional_prompts_views = self.get_views(
+            regional_prompts_views = self.calc_tiles_min_overlap(
                 height, width,
-                window_size_height=height_generation,
-                window_size_width=width_generation,
-                stride=stride,
+                tile_height=height_generation,
+                tile_width=width_generation,
+                min_overlap_x=min_overlap_x,
+                min_overlap_y=min_overlap_y,
+                add_weight_matrix=False,
             )
+
             regional_prompt_embeds = []
             for regional_prompt in regional_prompts:
                 regional_prompt_embed, regional_pooled_prompt_embed, regional_text_id = self.encode_prompt(
@@ -342,8 +344,10 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
             computed_regional_embeds=[]
             computed_regional_attention_mask=[]
 
+            # TODO: reimplement view_batch_size based on the number of regions
+
             for i, rv in enumerate(regional_prompts_views):
-                regional_mask_view = regional_area[rv[0]:rv[1], rv[2]:rv[3]]
+                regional_mask_view = regional_area[rv.coords.top:rv.coords.bottom, rv.coords.left:rv.coords.right]
 
                 interpolated_mask = torch.nn.functional.interpolate(
                     regional_mask_view[None, None, :, :].half(),
@@ -443,7 +447,7 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
                 value.zero_()
 
                 # Process each batch of views
-                for j, (batch_view, regional_embeds, attention_mask) in tqdm.tqdm(
+                for j, (tile, regional_embeds, attention_mask) in tqdm.tqdm(
                      enumerate(views_inputs),
                      total=len(latent_views),
                      position=1,
@@ -452,14 +456,15 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
                     if i < mask_inject_steps:
                         chosen_prompt_embeds = regional_embeds
                         self.joint_attention_kwargs['base_ratio'] = base_ratio
-                        self.joint_attention_kwargs['regional_attention_mask'] = attention_mask
+                        self.joint_attention_kwargs['regional_attention_mask'] = attention_mask.to(device)
                     else:
                         chosen_prompt_embeds = prompt_embeds
                         self.joint_attention_kwargs['base_ratio'] = None
                         self.joint_attention_kwargs['regional_attention_mask'] = None
 
                     # Get latents for the current views
-                    h_start, h_end, w_start, w_end = batch_view
+                    h_start, h_end = tile.coords.top, tile.coords.bottom
+                    w_start, w_end = tile.coords.left, tile.coords.right
                     latents_for_view = latents[:, :, h_start:h_end, w_start:w_end]
 
                     latents_for_view = self._pack_latents(
@@ -513,8 +518,8 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
                     )
 
                     # Accumulate the denoised result
-                    value[:, :, h_start:h_end, w_start:w_end] += noise_pred_unpacked
-                    count[:, :, h_start:h_end, w_start:w_end] += weight_matrix
+                    value[:, :, h_start:h_end, w_start:w_end] += noise_pred_unpacked * tile.weight
+                    count[:, :, h_start:h_end, w_start:w_end] += tile.weight
 
                 # Average the noise_pred using the accumulated values and counts
                 # compute the previous noisy sample x_t -> x_t-1
