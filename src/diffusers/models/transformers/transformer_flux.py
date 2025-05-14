@@ -547,7 +547,7 @@ class FluxTransformer2DModel(
             joint_attention_kwargs["encoder_seq_len_base"] = encoder_hidden_states_base.shape[1]
 
         # prepare txt_ids for concatenated regional prompts
-        txt_ids = torch.zeros(encoder_hidden_states.shape[1], 3).to(device=txt_ids.device, dtype=txt_ids.dtype)
+        txt_ids = torch.zeros(encoder_hidden_states.shape[1], 3, device=txt_ids.device, dtype=txt_ids.dtype)
 
         encoder_hidden_states = self.context_embedder(encoder_hidden_states)
 
