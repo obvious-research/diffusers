@@ -616,6 +616,8 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
             FluxKontextPipeline,
             FluxPipeline,
             FluxPanoramaPipeline,
+            FluxRegionalPipeline,
+            FluxPanoramaRegionalPipeline,
             FluxPriorReduxPipeline,
             ReduxImageEncoder,
         )
