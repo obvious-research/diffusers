@@ -979,6 +979,8 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
             FluxInpaintPipeline,
             FluxPipeline,
             FluxPanoramaPipeline,
+            FluxRegionalPipeline,
+            FluxPanoramaRegionalPipeline,
             FluxPriorReduxPipeline,
             HiDreamImagePipeline,
             HunyuanDiTControlNetPipeline,
