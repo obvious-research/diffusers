@@ -116,7 +116,8 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
         width_generation: Optional[int] = 1024,
         sigmas: Optional[List[float]] = None,
         regional_area: Optional[torch.FloatTensor] = None,
-        regional_prompts: Optional[Union[str, List[str]]] = None,
+        regional_prompts: Optional[Union[str, List[str],List[Tuple[str, str]]]] = None,
+        regional_base_prompt_trick: bool = True,
         mask_inject_steps: int = 5,
         base_ratio: float = 0.25,
         guidance_scale: float = 3.5,
@@ -327,8 +328,8 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
             regional_prompt_embeds = []
             for regional_prompt in regional_prompts:
                 regional_prompt_embed, regional_pooled_prompt_embed, regional_text_id = self.encode_prompt(
-                     prompt=regional_prompt,
-                     prompt_2=regional_prompt,
+                     prompt=regional_prompt[1] if regional_base_prompt_trick else regional_prompt,
+                     prompt_2=regional_prompt[1] if regional_base_prompt_trick else regional_prompt,
                      prompt_embeds=None,
                      pooled_prompt_embeds=None,
                      device=device,
@@ -343,6 +344,9 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
 
             computed_regional_embeds=[]
             computed_regional_attention_mask=[]
+
+            computed_prompt_embeds = []
+            computed_pooled_prompt_embeds = []
 
             # TODO: reimplement view_batch_size based on the number of regions
 
@@ -369,6 +373,27 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
                 local_regional_embeds = torch.cat(local_regional_embeds, dim=1)
                 computed_regional_embeds.append(local_regional_embeds)
                 encoder_seq_len = local_regional_embeds.shape[1]
+
+
+                if regional_base_prompt_trick:
+                    selec_prompt = [regional_prompts[i][0] for i in unique_values]
+                    regional_base_prompt = prompt + ' with ' + ' and '.join(selec_prompt)
+
+                    regional_base_prompt_embed, regional_pooled_base_prompt_embed, regional_text_id = self.encode_prompt(
+                        prompt=regional_base_prompt,
+                        prompt_2=regional_base_prompt,
+                        prompt_embeds=None,
+                        pooled_prompt_embeds=None,
+                        device=device,
+                        num_images_per_prompt=num_images_per_prompt,
+                        max_sequence_length=512,
+                        lora_scale=None
+                    )
+                    computed_prompt_embeds.append(regional_base_prompt_embed)
+                    computed_pooled_prompt_embeds.append(regional_pooled_base_prompt_embed)
+                else:
+                    computed_prompt_embeds.append(prompt_embeds)
+                    computed_pooled_prompt_embeds.append(pooled_prompt_embeds)
 
                 # initialize attention mask
                 regional_attention_mask = torch.zeros(
@@ -431,7 +456,7 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
             self.joint_attention_kwargs['double_inject_blocks_interval'] = len(self.transformer.transformer_blocks)
 
 
-        views_inputs = list(zip(latent_views, computed_regional_embeds, computed_regional_attention_mask))
+        views_inputs = list(zip(latent_views, computed_regional_embeds, computed_regional_attention_mask, computed_prompt_embeds, computed_pooled_prompt_embeds))
 
         # 6. Denoising loop
         with self.progress_bar(total=num_inference_steps) as progress_bar:
@@ -447,7 +472,7 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
                 value.zero_()
 
                 # Process each batch of views
-                for j, (tile, regional_embeds, attention_mask) in tqdm.tqdm(
+                for j, (tile, regional_embeds, attention_mask, prompt_embeds, pooled_prompt_embeds) in tqdm.tqdm(
                      enumerate(views_inputs),
                      total=len(latent_views),
                      position=1,
