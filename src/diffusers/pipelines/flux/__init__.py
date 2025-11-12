@@ -24,6 +24,9 @@ except OptionalDependencyNotAvailable:
 else:
     _import_structure["modeling_flux"] = ["ReduxImageEncoder"]
     _import_structure["pipeline_flux"] = ["FluxPipeline"]
+    _import_structure["pipeline_flux_panorama"] = ["FluxPanoramaPipeline"]
+    _import_structure["pipeline_flux_regional"] = ["FluxRegionalPipeline"]
+    _import_structure["pipeline_flux_panorama_regional"] = ["FluxPanoramaRegionalPipeline"]
     _import_structure["pipeline_flux_control"] = ["FluxControlPipeline"]
     _import_structure["pipeline_flux_control_img2img"] = ["FluxControlImg2ImgPipeline"]
     _import_structure["pipeline_flux_control_inpaint"] = ["FluxControlInpaintPipeline"]
@@ -45,6 +48,9 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
     else:
         from .modeling_flux import ReduxImageEncoder
         from .pipeline_flux import FluxPipeline
+        from .pipeline_flux_panorama import FluxPanoramaPipeline
+        from .pipeline_flux_regional import FluxRegionalPipeline
+        from .pipeline_flux_panorama_regional import FluxPanoramaRegionalPipeline
         from .pipeline_flux_control import FluxControlPipeline
         from .pipeline_flux_control_img2img import FluxControlImg2ImgPipeline
         from .pipeline_flux_control_inpaint import FluxControlInpaintPipeline
