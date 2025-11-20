@@ -1929,9 +1929,10 @@ class FluxLoraLoaderMixin(LoraBaseMixin):
     Specific to [`StableDiffusion3Pipeline`].
     """
 
-    _lora_loadable_modules = ["transformer", "text_encoder"]
+    _lora_loadable_modules = ["transformer", "text_encoder", "text_encoder_2"]
     transformer_name = TRANSFORMER_NAME
     text_encoder_name = TEXT_ENCODER_NAME
+    text_encoder_2_name = "text_encoder_2"
     _control_lora_supported_norm_keys = ["norm_q", "norm_k", "norm_added_q", "norm_added_k"]
 
     @classmethod
@@ -2402,15 +2403,17 @@ class FluxLoraLoaderMixin(LoraBaseMixin):
         save_directory: Union[str, os.PathLike],
         transformer_lora_layers: Dict[str, Union[torch.nn.Module, torch.Tensor]] = None,
         text_encoder_lora_layers: Dict[str, torch.nn.Module] = None,
+        text_encoder_2_lora_layers: Dict[str, torch.nn.Module] = None,
         is_main_process: bool = True,
         weight_name: str = None,
         save_function: Callable = None,
         safe_serialization: bool = True,
         transformer_lora_adapter_metadata=None,
         text_encoder_lora_adapter_metadata=None,
+        text_encoder_2_lora_adapter_metadata=None,
     ):
         r"""
-        Save the LoRA parameters corresponding to the UNet and text encoder.
+        Save the LoRA parameters corresponding to the transformer and text encoders.
 
         Arguments:
             save_directory (`str` or `os.PathLike`):
@@ -2419,6 +2422,9 @@ class FluxLoraLoaderMixin(LoraBaseMixin):
                 State dict of the LoRA layers corresponding to the `transformer`.
             text_encoder_lora_layers (`Dict[str, torch.nn.Module]` or `Dict[str, torch.Tensor]`):
                 State dict of the LoRA layers corresponding to the `text_encoder`. Must explicitly pass the text
+                encoder LoRA state dict because it comes from 🤗 Transformers.
+            text_encoder_2_lora_layers (`Dict[str, torch.nn.Module]` or `Dict[str, torch.Tensor]`):
+                State dict of the LoRA layers corresponding to the `text_encoder_2`. Must explicitly pass the text
                 encoder LoRA state dict because it comes from 🤗 Transformers.
             is_main_process (`bool`, *optional*, defaults to `True`):
                 Whether the process calling this is the main process or not. Useful during distributed training and you
@@ -2434,18 +2440,25 @@ class FluxLoraLoaderMixin(LoraBaseMixin):
                 LoRA adapter metadata associated with the transformer to be serialized with the state dict.
             text_encoder_lora_adapter_metadata:
                 LoRA adapter metadata associated with the text encoder to be serialized with the state dict.
+            text_encoder_2_lora_adapter_metadata:
+                LoRA adapter metadata associated with the second text encoder to be serialized with the state dict.
         """
         state_dict = {}
         lora_adapter_metadata = {}
 
-        if not (transformer_lora_layers or text_encoder_lora_layers):
-            raise ValueError("You must pass at least one of `transformer_lora_layers` and `text_encoder_lora_layers`.")
+        if not (transformer_lora_layers or text_encoder_lora_layers or text_encoder_2_lora_layers):
+            raise ValueError(
+                "You must pass at least one of `transformer_lora_layers`, `text_encoder_lora_layers`, `text_encoder_2_lora_layers`."
+            )
 
         if transformer_lora_layers:
             state_dict.update(cls.pack_weights(transformer_lora_layers, cls.transformer_name))
 
         if text_encoder_lora_layers:
             state_dict.update(cls.pack_weights(text_encoder_lora_layers, cls.text_encoder_name))
+
+        if text_encoder_2_lora_layers:
+            state_dict.update(cls.pack_weights(text_encoder_2_lora_layers, cls.text_encoder_2_name))
 
         if transformer_lora_adapter_metadata:
             lora_adapter_metadata.update(
@@ -2455,6 +2468,11 @@ class FluxLoraLoaderMixin(LoraBaseMixin):
         if text_encoder_lora_adapter_metadata:
             lora_adapter_metadata.update(
                 _pack_dict_with_prefix(text_encoder_lora_adapter_metadata, cls.text_encoder_name)
+            )
+
+        if text_encoder_2_lora_adapter_metadata:
+            lora_adapter_metadata.update(
+                _pack_dict_with_prefix(text_encoder_2_lora_adapter_metadata, cls.text_encoder_2_name)
             )
 
         # Save the model
