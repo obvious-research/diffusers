@@ -15,6 +15,7 @@ import inspect
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import torch
+from diffusers.loaders import PeftAdapterMixin
 from packaging import version
 from transformers import CLIPImageProcessor, CLIPTextModel, CLIPTokenizer, CLIPVisionModelWithProjection
 
@@ -775,6 +776,96 @@ class StableDiffusionPipeline(
     def interrupt(self):
         return self._interrupt
 
+    def set_terra_t(self, terra_t: Union[float, torch.Tensor, List[float]], adapter: Optional[str] = None, batch_size: int = 1, num_images_per_prompt: int = 1):
+        """
+        Set the time parameter for Terra (time-varying LoRA) adapters on the UNet.
+
+        This method delegates to the UNet's set_terra_t method. The time parameter controls
+        interpolation between source domain (t=0) and target domain (t=1).
+
+        Args:
+            terra_t (`float`, `torch.Tensor`, or `List[float]`):
+                The time parameter(s) for Terra adapters. Controls interpolation between
+                source domain (t=0) and target domain (t=1).
+            adapter (`str`, *optional*):
+                The name of the adapter to set the time for. If None, sets for all active adapters.
+
+        Example:
+            ```python
+            # Set time for all Terra adapters
+            pipeline.set_terra_t(0.5)
+
+            # Set time for a specific adapter
+            pipeline.set_terra_t(0.75, adapter="terra_adapter")
+
+            # Set per-sample times
+            pipeline.set_terra_t([0.1, 0.5, 0.9])
+            ```
+        """
+
+        if terra_t is not None:
+            if isinstance(terra_t, (float, int)):
+                terra_t = [terra_t]
+            if isinstance(terra_t, list):
+                terra_t = torch.tensor(terra_t)
+
+
+            PeftAdapterMixin.set_terra_t_recursive(self.text_encoder, terra_t, adapter=adapter)
+
+            if hasattr(self.unet, "set_terra_t"):
+
+                terra_t = terra_t.repeat_interleave(num_images_per_prompt)
+                if self.do_classifier_free_guidance:
+                    terra_t = torch.cat([terra_t, terra_t], dim=0)
+
+                expected_batch_size = batch_size * num_images_per_prompt * (2 if self.do_classifier_free_guidance else 1)
+
+                if terra_t.shape[0] != expected_batch_size:
+                    raise ValueError(f"Invalid shape for terra_t: {terra_t.shape}, expected {expected_batch_size},",
+                                     "terra_t should be same lenght as num_images_per_prompt")
+
+                self.unet.set_terra_t(terra_t, adapter=adapter)
+            else:
+                logger.warning(
+                    "The UNet does not support setting time parameters for Terra adapters. "
+                    "Skipping time parameter setting for Terra adapters."
+                )
+
+
+    def clear_terra_t(self, adapter: Optional[str] = None):
+        """
+        Clear the time parameter for Terra adapters on the UNet.
+
+        This resets the time parameter to None, allowing Terra adapters to use their
+        default behavior (using t_min from configuration).
+
+        Args:
+            adapter (`str`, *optional*):
+                The name of the adapter to clear the time for. If None, clears for all adapters.
+
+        Example:
+            ```python
+            # Clear time for all adapters
+            pipeline.clear_terra_t()
+
+            # Clear time for a specific adapter
+            pipeline.clear_terra_t(adapter="terra_adapter")
+            ```
+        """
+        if hasattr(self.unet, "clear_terra_t"):
+            self.unet.clear_terra_t(adapter=adapter)
+        else:
+            logger.warning(
+                "UNet does not have clear_terra_t method."
+            )
+
+        if hasattr(self.text_encoder, "clear_terra_t"):
+            self.text_encoder.clear_terra_t(adapter=adapter)
+        else:
+            logger.warning(
+                "text_encoder does not have clear_terra_t method."
+            )
+
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
@@ -804,6 +895,7 @@ class StableDiffusionPipeline(
             Union[Callable[[int, int, Dict], None], PipelineCallback, MultiPipelineCallbacks]
         ] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
+        terra_t: Optional[Union[float, torch.Tensor, List[float]]] = None,
         **kwargs,
     ):
         r"""
@@ -881,6 +973,12 @@ class StableDiffusionPipeline(
                 The list of tensor inputs for the `callback_on_step_end` function. The tensors specified in the list
                 will be passed as `callback_kwargs` argument. You will only be able to include variables listed in the
                 `._callback_tensor_inputs` attribute of your pipeline class.
+            terra_t (`float`, `torch.Tensor`, or `List[float]`, *optional*):
+                Time parameter for Terra (time-varying LoRA) adapters. Controls the interpolation between source
+                domain (t=0) and target domain (t=1). Can be:
+                - A single float value applied to all samples
+                - A tensor of shape [batch_size] for per-sample time values
+                - A list of floats for per-sample time values
 
         Examples:
 
@@ -960,6 +1058,15 @@ class StableDiffusionPipeline(
         lora_scale = (
             self.cross_attention_kwargs.get("scale", None) if self.cross_attention_kwargs is not None else None
         )
+
+        if terra_t is not None:
+            if (isinstance(terra_t, list) and len(terra_t) != batch_size) or (isinstance(terra_t, torch.Tensor) and terra_t.shape[0] != batch_size):
+                raise ValueError(
+                    f"You have passed a list of generators of length {len(terra_t)}, but requested an effective batch"
+                    f" size of {batch_size}. Make sure the batch size matches the length of the generators."
+                )
+
+            self.set_terra_t(terra_t, batch_size=batch_size, num_images_per_prompt=num_images_per_prompt)
 
         prompt_embeds, negative_prompt_embeds = self.encode_prompt(
             prompt,

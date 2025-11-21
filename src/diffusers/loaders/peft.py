@@ -22,6 +22,8 @@ from typing import Dict, List, Literal, Optional, Union
 import safetensors
 import torch
 
+from peft.tuners.lora import LoraLayer
+from peft.tuners.tuners_utils import BaseTunerLayer
 from ..utils import (
     MIN_PEFT_VERSION,
     USE_PEFT_BACKEND,
@@ -824,3 +826,42 @@ class PeftAdapterMixin:
                 )
 
         self._prepare_lora_hotswap_kwargs = {"target_rank": target_rank, "check_compiled": check_compiled}
+
+    @staticmethod
+    # Store at module level for all LoRA layers to access
+    def set_terra_t_recursive(module, terra_t, adapter=None):
+        # Convert to tensor if needed
+        if isinstance(terra_t, list):
+            terra_t = torch.tensor(terra_t)
+        elif not isinstance(terra_t, torch.Tensor):
+            terra_t = torch.tensor([terra_t])
+
+        # Set on LoRA layers that support Terra
+        if isinstance(module, LoraLayer):
+            if hasattr(module, "set_terra_t"):
+                module.set_terra_t(terra_t, adapter)
+        for child in module.children():
+            PeftAdapterMixin.set_terra_t_recursive(child, terra_t, adapter)
+
+
+    def set_terra_t(self, terra_t: Union[float, torch.Tensor, List[float]], adapter):
+        """
+        Set the time parameter for Terra (time-varying LoRA) adapters.
+
+        Args:
+            terra_t (`float`, `torch.Tensor`, or `List[float]`):
+                The time parameter(s) for Terra adapters. Can be:
+                - A single float value applied to all samples
+                - A tensor of shape [batch_size] for per-sample time values
+                - A list of floats for per-sample time values
+        """
+
+        if not USE_PEFT_BACKEND:
+            raise ValueError("PEFT backend is required for this method.")
+
+        self.set_terra_t_recursive(self, terra_t, adapter)
+
+    def clear_terra_t(self):
+        raise NotImplementedError(
+            "Clearing the time parameter for Terra (time-varying LoRA) adapters is not yet supported."
+        )

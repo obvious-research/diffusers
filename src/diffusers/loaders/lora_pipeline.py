@@ -2228,6 +2228,19 @@ class FluxLoraLoaderMixin(LoraBaseMixin):
             hotswap=hotswap,
         )
 
+        self.load_lora_into_text_encoder_2(
+            state_dict,
+            network_alphas=network_alphas,
+            text_encoder=self.text_encoder_2,
+            prefix=self.text_encoder_2_name,
+            lora_scale=self.lora_scale,
+            adapter_name=adapter_name,
+            metadata=metadata,
+            _pipeline=self,
+            low_cpu_mem_usage=low_cpu_mem_usage,
+            hotswap=hotswap,
+        )
+
     @classmethod
     def load_lora_into_transformer(
         cls,
@@ -2394,6 +2407,39 @@ class FluxLoraLoaderMixin(LoraBaseMixin):
             _pipeline=_pipeline,
             low_cpu_mem_usage=low_cpu_mem_usage,
             hotswap=hotswap,
+        )
+
+    @classmethod
+    def load_lora_into_text_encoder_2(
+            cls,
+            state_dict,
+            network_alphas,
+            text_encoder,
+            prefix=None,
+            lora_scale=1.0,
+            adapter_name=None,
+            _pipeline=None,
+            low_cpu_mem_usage=False,
+            hotswap: bool = False,
+            metadata=None,
+    ):
+        """
+        This will load the LoRA layers specified in `state_dict` into `text_encoder_2` (usually T5).
+        """
+
+        # Call the internal helper we defined above, specifying the correct component name
+        _load_lora_into_text_encoder(
+            state_dict=state_dict,
+            network_alphas=network_alphas,
+            text_encoder=text_encoder,
+            prefix=prefix,
+            lora_scale=lora_scale,
+            text_encoder_name=cls.text_encoder_2_name,
+            adapter_name=adapter_name,
+            _pipeline=_pipeline,
+            low_cpu_mem_usage=low_cpu_mem_usage,
+            hotswap=hotswap,
+            metadata=metadata,
         )
 
     @classmethod

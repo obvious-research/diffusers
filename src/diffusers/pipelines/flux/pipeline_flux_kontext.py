@@ -723,6 +723,103 @@ class FluxKontextPipeline(
     def interrupt(self):
         return self._interrupt
 
+    def set_terra_t(self, terra_t: Union[float, torch.Tensor, List[float]], adapter: Optional[str] = None, batch_size=None, num_images_per_prompt=None, do_true_cfg=False):
+        """
+        Set the time parameter for Terra (time-varying LoRA) adapters on the UNet.
+
+        This method delegates to the UNet's set_terra_t method. The time parameter controls
+        interpolation between source domain (t=0) and target domain (t=1).
+
+        Args:
+            terra_t (`float`, `torch.Tensor`, or `List[float]`):
+                The time parameter(s) for Terra adapters. Controls interpolation between
+                source domain (t=0) and target domain (t=1).
+            adapter (`str`, *optional*):
+                The name of the adapter to set the time for. If None, sets for all active adapters.
+
+        Example:
+            ```python
+            # Set time for all Terra adapters
+            pipeline.set_terra_t(0.5)
+
+            # Set time for a specific adapter
+            pipeline.set_terra_t(0.75, adapter="terra_adapter")
+
+            # Set per-sample times
+            pipeline.set_terra_t([0.1, 0.5, 0.9])
+            ```
+        """
+
+
+        if terra_t is not None:
+            if isinstance(terra_t, (float, int)):
+                terra_t = [terra_t]
+            if isinstance(terra_t, list):
+                terra_t = torch.tensor(terra_t)
+
+            PeftAdapterMixin.set_terra_t_recursive(self.text_encoder, terra_t, adapter=adapter)
+            PeftAdapterMixin.set_terra_t_recursive(self.text_encoder_2, terra_t, adapter=adapter)
+
+            if hasattr(self.transformer, "set_terra_t"):
+                cfg_batch_multiplier = 2 if do_true_cfg else 1
+
+                terra_t = terra_t.repeat_interleave(num_images_per_prompt)
+                if do_true_cfg:
+                    terra_t = torch.cat([terra_t, terra_t], dim=0)
+
+                expected_batch_size = batch_size * num_images_per_prompt * cfg_batch_multiplier
+
+                if terra_t.shape[0] != expected_batch_size:
+                    raise ValueError(f"Invalid shape for terra_t: {terra_t.shape}, expected {expected_batch_size},",
+                                     "terra_t should be same lenght as num_images_per_prompt")
+                self.transformer.set_terra_t(terra_t, adapter=adapter)
+            else:
+                logger.warning(
+                    "The Transformer does not support setting time parameters for Terra adapters. "
+                    "Skipping time parameter setting for Terra adapters."
+                )
+
+    def clear_terra_t(self, adapter: Optional[str] = None):
+        """
+        Clear the time parameter for Terra adapters on the UNet.
+
+        This resets the time parameter to None, allowing Terra adapters to use their
+        default behavior (using t_min from configuration).
+
+        Args:
+            adapter (`str`, *optional*):
+                The name of the adapter to clear the time for. If None, clears for all adapters.
+
+        Example:
+            ```python
+            # Clear time for all adapters
+            pipeline.clear_terra_t()
+
+            # Clear time for a specific adapter
+            pipeline.clear_terra_t(adapter="terra_adapter")
+            ```
+        """
+        if hasattr(self.transformer, "clear_terra_t"):
+            self.transformer.clear_terra_t(adapter=adapter)
+        else:
+            logger.warning(
+                "Transformer does not have clear_terra_t method."
+            )
+
+        if hasattr(self.text_encoder, "clear_terra_t"):
+            self.text_encoder.clear_terra_t(adapter=adapter)
+        else:
+            logger.warning(
+                "Text encoder does not have clear_terra_t method. Make sure Terra adapters are loaded."
+            )
+
+        if hasattr(self.text_encoder_2, "clear_terra_t"):
+            self.text_encoder_2.clear_terra_t(adapter=adapter)
+        else:
+            logger.warning(
+                "Text encoder 2 does not have clear_terra_t method. Make sure Terra adapters are loaded."
+            )
+
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
@@ -757,6 +854,7 @@ class FluxKontextPipeline(
         max_sequence_length: int = 512,
         max_area: int = 1024**2,
         _auto_resize: bool = True,
+        terra_t: Optional[Union[float, torch.Tensor, List[float]]] = None,
     ):
         r"""
         Function invoked when calling the pipeline for generation.
@@ -922,6 +1020,18 @@ class FluxKontextPipeline(
             negative_prompt_embeds is not None and negative_pooled_prompt_embeds is not None
         )
         do_true_cfg = true_cfg_scale > 1 and has_neg_prompt
+
+        if terra_t is not None:
+            if (isinstance(terra_t, list) and len(terra_t) != batch_size) or (
+                    isinstance(terra_t, torch.Tensor) and terra_t.shape[0] != batch_size):
+                raise ValueError(
+                    f"You have passed a list of generators of length {len(terra_t)}, but requested an effective batch"
+                    f" size of {batch_size}. Make sure the batch size matches the length of the generators."
+                )
+
+            self.set_terra_t(terra_t, batch_size=batch_size, num_images_per_prompt=num_images_per_prompt,
+                             do_true_cfg=do_true_cfg)
+
         (
             prompt_embeds,
             pooled_prompt_embeds,

@@ -376,7 +376,18 @@ def _load_lora_into_text_encoder(
         state_dict = convert_state_dict_to_peft(state_dict)
 
         for name, _ in text_encoder.named_modules():
-            if name.endswith((".q_proj", ".k_proj", ".v_proj", ".out_proj", ".fc1", ".fc2")):
+            if name.endswith((
+                ".q_proj",
+                ".k_proj",
+                ".v_proj",
+                ".out_proj",
+                ".fc1",
+                ".fc2",
+                ".q",
+                ".k",
+                ".v",
+                ".o",
+            )):
                 rank_key = f"{name}.lora_B.weight"
                 if rank_key in state_dict:
                     rank[rank_key] = state_dict[rank_key].shape[1]
