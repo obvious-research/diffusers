@@ -343,11 +343,17 @@ class MagCacheBlockHook(ModelHook):
             if out_hidden.shape == in_hidden.shape:
                 residual = out_hidden - in_hidden
             elif out_hidden.ndim == 3 and in_hidden.ndim == 3 and out_hidden.shape[2] == in_hidden.shape[2]:
-                diff = in_hidden.shape[1] - out_hidden.shape[1]
-                if diff == 0:
+                # Handle sequence length mismatch by slicing to match the shorter sequence
+                out_seq_len = out_hidden.shape[1]
+                in_seq_len = in_hidden.shape[1]
+                if out_seq_len == in_seq_len:
                     residual = out_hidden - in_hidden
+                elif out_seq_len > in_seq_len:
+                    # Output has more tokens, slice to match input (take the tail)
+                    residual = out_hidden[:, -in_seq_len:] - in_hidden
                 else:
-                    residual = out_hidden - in_hidden  # Fallback to matching tail
+                    # Input has more tokens, slice to match output (take the tail)
+                    residual = out_hidden - in_hidden[:, -out_seq_len:]
             else:
                 # Fallback for completely mismatched shapes
                 residual = out_hidden
