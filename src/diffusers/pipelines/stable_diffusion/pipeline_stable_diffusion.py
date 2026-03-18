@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import inspect
-from typing import Any, Callable
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import torch
+from diffusers.loaders import PeftAdapterMixin
 from packaging import version
 from transformers import CLIPImageProcessor, CLIPTextModel, CLIPTokenizer, CLIPVisionModelWithProjection
 
@@ -94,10 +95,10 @@ def rescale_noise_cfg(noise_cfg, noise_pred_text, guidance_rescale=0.0):
 
 def retrieve_timesteps(
     scheduler,
-    num_inference_steps: int | None = None,
-    device: str | torch.device | None = None,
-    timesteps: list[int] | None = None,
-    sigmas: list[float] | None = None,
+    num_inference_steps: Optional[int] = None,
+    device: Optional[Union[str, torch.device]] = None,
+    timesteps: Optional[List[int]] = None,
+    sigmas: Optional[List[float]] = None,
     **kwargs,
 ):
     r"""
@@ -112,15 +113,15 @@ def retrieve_timesteps(
             must be `None`.
         device (`str` or `torch.device`, *optional*):
             The device to which the timesteps should be moved to. If `None`, the timesteps are not moved.
-        timesteps (`list[int]`, *optional*):
+        timesteps (`List[int]`, *optional*):
             Custom timesteps used to override the timestep spacing strategy of the scheduler. If `timesteps` is passed,
             `num_inference_steps` and `sigmas` must be `None`.
-        sigmas (`list[float]`, *optional*):
+        sigmas (`List[float]`, *optional*):
             Custom sigmas used to override the timestep spacing strategy of the scheduler. If `sigmas` is passed,
             `num_inference_steps` and `timesteps` must be `None`.
 
     Returns:
-        `tuple[torch.Tensor, int]`: A tuple where the first element is the timestep schedule from the scheduler and the
+        `Tuple[torch.Tensor, int]`: A tuple where the first element is the timestep schedule from the scheduler and the
         second element is the number of inference steps.
     """
     if timesteps is not None and sigmas is not None:
@@ -304,9 +305,9 @@ class StableDiffusionPipeline(
         num_images_per_prompt,
         do_classifier_free_guidance,
         negative_prompt=None,
-        prompt_embeds: torch.Tensor | None = None,
-        negative_prompt_embeds: torch.Tensor | None = None,
-        lora_scale: float | None = None,
+        prompt_embeds: Optional[torch.Tensor] = None,
+        negative_prompt_embeds: Optional[torch.Tensor] = None,
+        lora_scale: Optional[float] = None,
         **kwargs,
     ):
         deprecation_message = "`_encode_prompt()` is deprecated and it will be removed in a future version. Use `encode_prompt()` instead. Also, be aware that the output format changed from a concatenated tensor to a tuple."
@@ -336,16 +337,16 @@ class StableDiffusionPipeline(
         num_images_per_prompt,
         do_classifier_free_guidance,
         negative_prompt=None,
-        prompt_embeds: torch.Tensor | None = None,
-        negative_prompt_embeds: torch.Tensor | None = None,
-        lora_scale: float | None = None,
-        clip_skip: int | None = None,
+        prompt_embeds: Optional[torch.Tensor] = None,
+        negative_prompt_embeds: Optional[torch.Tensor] = None,
+        lora_scale: Optional[float] = None,
+        clip_skip: Optional[int] = None,
     ):
         r"""
         Encodes the prompt into text encoder hidden states.
 
         Args:
-            prompt (`str` or `list[str]`, *optional*):
+            prompt (`str` or `List[str]`, *optional*):
                 prompt to be encoded
             device: (`torch.device`):
                 torch device
@@ -353,7 +354,7 @@ class StableDiffusionPipeline(
                 number of images that should be generated per prompt
             do_classifier_free_guidance (`bool`):
                 whether to use classifier free guidance or not
-            negative_prompt (`str` or `list[str]`, *optional*):
+            negative_prompt (`str` or `List[str]`, *optional*):
                 The prompt or prompts not to guide the image generation. If not defined, one has to pass
                 `negative_prompt_embeds` instead. Ignored when not using guidance (i.e., ignored if `guidance_scale` is
                 less than `1`).
@@ -452,7 +453,7 @@ class StableDiffusionPipeline(
 
         # get unconditional embeddings for classifier free guidance
         if do_classifier_free_guidance and negative_prompt_embeds is None:
-            uncond_tokens: list[str]
+            uncond_tokens: List[str]
             if negative_prompt is None:
                 uncond_tokens = [""] * batch_size
             elif prompt is not None and type(prompt) is not type(negative_prompt):
@@ -775,40 +776,133 @@ class StableDiffusionPipeline(
     def interrupt(self):
         return self._interrupt
 
+    def set_terra_t(self, terra_t: Union[float, torch.Tensor, List[float]], adapter: Optional[str] = None, batch_size: int = 1, num_images_per_prompt: int = 1):
+        """
+        Set the time parameter for Terra (time-varying LoRA) adapters on the UNet.
+
+        This method delegates to the UNet's set_terra_t method. The time parameter controls
+        interpolation between source domain (t=0) and target domain (t=1).
+
+        Args:
+            terra_t (`float`, `torch.Tensor`, or `List[float]`):
+                The time parameter(s) for Terra adapters. Controls interpolation between
+                source domain (t=0) and target domain (t=1).
+            adapter (`str`, *optional*):
+                The name of the adapter to set the time for. If None, sets for all active adapters.
+
+        Example:
+            ```python
+            # Set time for all Terra adapters
+            pipeline.set_terra_t(0.5)
+
+            # Set time for a specific adapter
+            pipeline.set_terra_t(0.75, adapter="terra_adapter")
+
+            # Set per-sample times
+            pipeline.set_terra_t([0.1, 0.5, 0.9])
+            ```
+        """
+
+        if terra_t is not None:
+            if isinstance(terra_t, (float, int)):
+                terra_t = [terra_t]
+            if isinstance(terra_t, list):
+                terra_t = torch.tensor(terra_t)
+
+
+            PeftAdapterMixin.set_terra_t_recursive(self.text_encoder, terra_t, adapter=adapter)
+
+            if hasattr(self.unet, "set_terra_t"):
+
+                terra_t = terra_t.repeat_interleave(num_images_per_prompt)
+                if self.do_classifier_free_guidance:
+                    terra_t = torch.cat([terra_t, terra_t], dim=0)
+
+                expected_batch_size = batch_size * num_images_per_prompt * (2 if self.do_classifier_free_guidance else 1)
+
+                if terra_t.shape[0] != expected_batch_size:
+                    raise ValueError(f"Invalid shape for terra_t: {terra_t.shape}, expected {expected_batch_size},",
+                                     "terra_t should be same lenght as num_images_per_prompt")
+
+                self.unet.set_terra_t(terra_t, adapter=adapter)
+            else:
+                logger.warning(
+                    "The UNet does not support setting time parameters for Terra adapters. "
+                    "Skipping time parameter setting for Terra adapters."
+                )
+
+
+    def clear_terra_t(self, adapter: Optional[str] = None):
+        """
+        Clear the time parameter for Terra adapters on the UNet.
+
+        This resets the time parameter to None, allowing Terra adapters to use their
+        default behavior (using t_min from configuration).
+
+        Args:
+            adapter (`str`, *optional*):
+                The name of the adapter to clear the time for. If None, clears for all adapters.
+
+        Example:
+            ```python
+            # Clear time for all adapters
+            pipeline.clear_terra_t()
+
+            # Clear time for a specific adapter
+            pipeline.clear_terra_t(adapter="terra_adapter")
+            ```
+        """
+        if hasattr(self.unet, "clear_terra_t"):
+            self.unet.clear_terra_t(adapter=adapter)
+        else:
+            logger.warning(
+                "UNet does not have clear_terra_t method."
+            )
+
+        if hasattr(self.text_encoder, "clear_terra_t"):
+            self.text_encoder.clear_terra_t(adapter=adapter)
+        else:
+            logger.warning(
+                "text_encoder does not have clear_terra_t method."
+            )
+
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
         self,
-        prompt: str | list[str] = None,
-        height: int | None = None,
-        width: int | None = None,
+        prompt: Union[str, List[str]] = None,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
         num_inference_steps: int = 50,
-        timesteps: list[int] = None,
-        sigmas: list[float] = None,
+        timesteps: List[int] = None,
+        sigmas: List[float] = None,
         guidance_scale: float = 7.5,
-        negative_prompt: str | list[str] | None = None,
-        num_images_per_prompt: int | None = 1,
+        negative_prompt: Optional[Union[str, List[str]]] = None,
+        num_images_per_prompt: Optional[int] = 1,
         eta: float = 0.0,
-        generator: torch.Generator | list[torch.Generator] | None = None,
-        latents: torch.Tensor | None = None,
-        prompt_embeds: torch.Tensor | None = None,
-        negative_prompt_embeds: torch.Tensor | None = None,
-        ip_adapter_image: PipelineImageInput | None = None,
-        ip_adapter_image_embeds: list[torch.Tensor] | None = None,
-        output_type: str | None = "pil",
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+        latents: Optional[torch.Tensor] = None,
+        prompt_embeds: Optional[torch.Tensor] = None,
+        negative_prompt_embeds: Optional[torch.Tensor] = None,
+        ip_adapter_image: Optional[PipelineImageInput] = None,
+        ip_adapter_image_embeds: Optional[List[torch.Tensor]] = None,
+        output_type: Optional[str] = "pil",
         return_dict: bool = True,
-        cross_attention_kwargs: dict[str, Any] | None = None,
+        cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         guidance_rescale: float = 0.0,
-        clip_skip: int | None = None,
-        callback_on_step_end: Callable[[int, int], None] | PipelineCallback | MultiPipelineCallbacks | None = None,
-        callback_on_step_end_tensor_inputs: list[str] = ["latents"],
+        clip_skip: Optional[int] = None,
+        callback_on_step_end: Optional[
+            Union[Callable[[int, int, Dict], None], PipelineCallback, MultiPipelineCallbacks]
+        ] = None,
+        callback_on_step_end_tensor_inputs: List[str] = ["latents"],
+        terra_t: Optional[Union[float, torch.Tensor, List[float]]] = None,
         **kwargs,
     ):
         r"""
         The call function to the pipeline for generation.
 
         Args:
-            prompt (`str` or `list[str]`, *optional*):
+            prompt (`str` or `List[str]`, *optional*):
                 The prompt or prompts to guide image generation. If not defined, you need to pass `prompt_embeds`.
             height (`int`, *optional*, defaults to `self.unet.config.sample_size * self.vae_scale_factor`):
                 The height in pixels of the generated image.
@@ -817,18 +911,18 @@ class StableDiffusionPipeline(
             num_inference_steps (`int`, *optional*, defaults to 50):
                 The number of denoising steps. More denoising steps usually lead to a higher quality image at the
                 expense of slower inference.
-            timesteps (`list[int]`, *optional*):
+            timesteps (`List[int]`, *optional*):
                 Custom timesteps to use for the denoising process with schedulers which support a `timesteps` argument
                 in their `set_timesteps` method. If not defined, the default behavior when `num_inference_steps` is
                 passed will be used. Must be in descending order.
-            sigmas (`list[float]`, *optional*):
+            sigmas (`List[float]`, *optional*):
                 Custom sigmas to use for the denoising process with schedulers which support a `sigmas` argument in
                 their `set_timesteps` method. If not defined, the default behavior when `num_inference_steps` is passed
                 will be used.
             guidance_scale (`float`, *optional*, defaults to 7.5):
                 A higher guidance scale value encourages the model to generate images closely linked to the text
                 `prompt` at the expense of lower image quality. Guidance scale is enabled when `guidance_scale > 1`.
-            negative_prompt (`str` or `list[str]`, *optional*):
+            negative_prompt (`str` or `List[str]`, *optional*):
                 The prompt or prompts to guide what to not include in image generation. If not defined, you need to
                 pass `negative_prompt_embeds` instead. Ignored when not using guidance (`guidance_scale < 1`).
             num_images_per_prompt (`int`, *optional*, defaults to 1):
@@ -836,7 +930,7 @@ class StableDiffusionPipeline(
             eta (`float`, *optional*, defaults to 0.0):
                 Corresponds to parameter eta (η) from the [DDIM](https://huggingface.co/papers/2010.02502) paper. Only
                 applies to the [`~schedulers.DDIMScheduler`], and is ignored in other schedulers.
-            generator (`torch.Generator` or `list[torch.Generator]`, *optional*):
+            generator (`torch.Generator` or `List[torch.Generator]`, *optional*):
                 A [`torch.Generator`](https://pytorch.org/docs/stable/generated/torch.Generator.html) to make
                 generation deterministic.
             latents (`torch.Tensor`, *optional*):
@@ -850,7 +944,7 @@ class StableDiffusionPipeline(
                 Pre-generated negative text embeddings. Can be used to easily tweak text inputs (prompt weighting). If
                 not provided, `negative_prompt_embeds` are generated from the `negative_prompt` input argument.
             ip_adapter_image: (`PipelineImageInput`, *optional*): Optional image input to work with IP Adapters.
-            ip_adapter_image_embeds (`list[torch.Tensor]`, *optional*):
+            ip_adapter_image_embeds (`List[torch.Tensor]`, *optional*):
                 Pre-generated image embeddings for IP-Adapter. It should be a list of length same as number of
                 IP-adapters. Each element should be a tensor of shape `(batch_size, num_images, emb_dim)`. It should
                 contain the negative image embedding if `do_classifier_free_guidance` is set to `True`. If not
@@ -875,10 +969,16 @@ class StableDiffusionPipeline(
                 each denoising step during the inference. with the following arguments: `callback_on_step_end(self:
                 DiffusionPipeline, step: int, timestep: int, callback_kwargs: Dict)`. `callback_kwargs` will include a
                 list of all tensors as specified by `callback_on_step_end_tensor_inputs`.
-            callback_on_step_end_tensor_inputs (`list`, *optional*):
+            callback_on_step_end_tensor_inputs (`List`, *optional*):
                 The list of tensor inputs for the `callback_on_step_end` function. The tensors specified in the list
                 will be passed as `callback_kwargs` argument. You will only be able to include variables listed in the
                 `._callback_tensor_inputs` attribute of your pipeline class.
+            terra_t (`float`, `torch.Tensor`, or `List[float]`, *optional*):
+                Time parameter for Terra (time-varying LoRA) adapters. Controls the interpolation between source
+                domain (t=0) and target domain (t=1). Can be:
+                - A single float value applied to all samples
+                - A tensor of shape [batch_size] for per-sample time values
+                - A list of floats for per-sample time values
 
         Examples:
 
@@ -958,6 +1058,15 @@ class StableDiffusionPipeline(
         lora_scale = (
             self.cross_attention_kwargs.get("scale", None) if self.cross_attention_kwargs is not None else None
         )
+
+        if terra_t is not None:
+            if (isinstance(terra_t, list) and len(terra_t) != batch_size) or (isinstance(terra_t, torch.Tensor) and terra_t.shape[0] != batch_size):
+                raise ValueError(
+                    f"You have passed a list of generators of length {len(terra_t)}, but requested an effective batch"
+                    f" size of {batch_size}. Make sure the batch size matches the length of the generators."
+                )
+
+            self.set_terra_t(terra_t, batch_size=batch_size, num_images_per_prompt=num_images_per_prompt)
 
         prompt_embeds, negative_prompt_embeds = self.encode_prompt(
             prompt,
