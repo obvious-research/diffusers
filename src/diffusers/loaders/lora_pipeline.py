@@ -77,6 +77,8 @@ if is_torch_version(">=", "1.9.0"):
 logger = logging.get_logger(__name__)
 
 TEXT_ENCODER_NAME = "text_encoder"
+TEXT_ENCODER_2_NAME = "text_encoder_2"
+
 UNET_NAME = "unet"
 TRANSFORMER_NAME = "transformer"
 LTX2_CONNECTOR_NAME = "connectors"
@@ -1499,6 +1501,7 @@ class FluxLoraLoaderMixin(LoraBaseMixin):
     _lora_loadable_modules = ["transformer", "text_encoder"]
     transformer_name = TRANSFORMER_NAME
     text_encoder_name = TEXT_ENCODER_NAME
+    text_encoder_2_name = TEXT_ENCODER_2_NAME
     _control_lora_supported_norm_keys = ["norm_q", "norm_k", "norm_added_q", "norm_added_k"]
 
     @classmethod
@@ -1728,6 +1731,19 @@ class FluxLoraLoaderMixin(LoraBaseMixin):
             hotswap=hotswap,
         )
 
+        self.load_lora_into_text_encoder_2(
+            state_dict,
+            network_alphas=network_alphas,
+            text_encoder=self.text_encoder_2,
+            prefix=self.text_encoder_2_name,
+            lora_scale=self.lora_scale,
+            adapter_name=adapter_name,
+            metadata=metadata,
+            _pipeline=self,
+            low_cpu_mem_usage=low_cpu_mem_usage,
+            hotswap=hotswap,
+        )
+
     @classmethod
     def load_lora_into_transformer(
         cls,
@@ -1874,18 +1890,53 @@ class FluxLoraLoaderMixin(LoraBaseMixin):
         )
 
     @classmethod
+    def load_lora_into_text_encoder_2(
+            cls,
+            state_dict,
+            network_alphas,
+            text_encoder,
+            prefix=None,
+            lora_scale=1.0,
+            adapter_name=None,
+            _pipeline=None,
+            low_cpu_mem_usage=False,
+            hotswap: bool = False,
+            metadata=None,
+    ):
+        """
+        This will load the LoRA layers specified in `state_dict` into `text_encoder_2` (usually T5).
+        """
+
+        # Call the internal helper we defined above, specifying the correct component name
+        _load_lora_into_text_encoder(
+            state_dict=state_dict,
+            network_alphas=network_alphas,
+            text_encoder=text_encoder,
+            prefix=prefix,
+            lora_scale=lora_scale,
+            text_encoder_name=cls.text_encoder_2_name,
+            adapter_name=adapter_name,
+            _pipeline=_pipeline,
+            low_cpu_mem_usage=low_cpu_mem_usage,
+            hotswap=hotswap,
+            metadata=metadata,
+        )
+
+    @classmethod
     # Copied from diffusers.loaders.lora_pipeline.StableDiffusionLoraLoaderMixin.save_lora_weights with unet->transformer
     def save_lora_weights(
         cls,
         save_directory: str | os.PathLike,
         transformer_lora_layers: dict[str, torch.nn.Module | torch.Tensor] = None,
         text_encoder_lora_layers: dict[str, torch.nn.Module] = None,
+        text_encoder_2_lora_layers: Dict[str, torch.nn.Module] = None,
         is_main_process: bool = True,
         weight_name: str = None,
         save_function: Callable = None,
         safe_serialization: bool = True,
         transformer_lora_adapter_metadata=None,
         text_encoder_lora_adapter_metadata=None,
+        text_encoder_2_lora_adapter_metadata=None,
     ):
         r"""
         Save the LoRA parameters corresponding to the UNet and text encoder.
@@ -1923,6 +1974,10 @@ class FluxLoraLoaderMixin(LoraBaseMixin):
         if text_encoder_lora_layers:
             lora_layers[cls.text_encoder_name] = text_encoder_lora_layers
             lora_metadata[cls.text_encoder_name] = text_encoder_lora_adapter_metadata
+
+        if text_encoder_2_lora_layers:
+            lora_layers[cls.text_encoder_2_name] = text_encoder_2_lora_layers
+            lora_metadata[cls.text_encoder_2_name] = text_encoder_2_lora_adapter_metadata
 
         if not lora_layers:
             raise ValueError("You must pass at least one of `transformer_lora_layers` or `text_encoder_lora_layers`.")
@@ -1969,7 +2024,7 @@ class FluxLoraLoaderMixin(LoraBaseMixin):
             **kwargs,
         )
 
-    def unfuse_lora(self, components: list[str] = ["transformer", "text_encoder"], **kwargs):
+    def unfuse_lora(self, components: list[str] = ["transformer", "text_encoder", "text_encoder_2"], **kwargs):
         r"""
         Reverses the effect of
         [`pipe.fuse_lora()`](https://huggingface.co/docs/diffusers/main/en/api/loaders#diffusers.loaders.LoraBaseMixin.fuse_lora).
