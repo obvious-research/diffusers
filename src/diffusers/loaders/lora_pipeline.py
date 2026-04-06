@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import os
-from typing import Callable
+from typing import Callable, Dict
 
 import torch
 from huggingface_hub.utils import validate_hf_hub_args

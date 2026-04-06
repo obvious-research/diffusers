@@ -18,7 +18,7 @@ import os
 from collections import defaultdict
 from functools import partial
 from pathlib import Path
-from typing import Literal
+from typing import List, Literal, Union
 
 import safetensors
 import torch
