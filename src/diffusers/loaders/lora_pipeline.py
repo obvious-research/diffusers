@@ -6185,6 +6185,16 @@ class Flux2LoraLoaderMixin(LoraBaseMixin):
             hotswap=hotswap,
         )
 
+        self.load_lora_into_text_encoder(
+            state_dict,
+            text_encoder=getattr(self, self.text_encoder_name) if not hasattr(self, "text_encoder") else self.text_encoder,
+            adapter_name=adapter_name,
+            metadata=metadata,
+            _pipeline=self,
+            low_cpu_mem_usage=low_cpu_mem_usage,
+            hotswap=hotswap,
+        )
+
     @classmethod
     # Copied from diffusers.loaders.lora_pipeline.SD3LoraLoaderMixin.load_lora_into_transformer with SD3Transformer2DModel->CogView4Transformer2DModel
     def load_lora_into_transformer(
@@ -6218,16 +6228,76 @@ class Flux2LoraLoaderMixin(LoraBaseMixin):
         )
 
     @classmethod
+    # Copied from diffusers.loaders.lora_pipeline.StableDiffusionLoraLoaderMixin.load_lora_into_text_encoder
+    def load_lora_into_text_encoder(
+            cls,
+            state_dict,
+            text_encoder,
+            prefix=None,
+            lora_scale=1.0,
+            adapter_name=None,
+            _pipeline=None,
+            low_cpu_mem_usage=False,
+            hotswap: bool = False,
+            metadata=None,
+    ):
+        """
+        This will load the LoRA layers specified in `state_dict` into `text_encoder`
+
+        Parameters:
+            state_dict (`dict`):
+                A standard state dict containing the lora layer parameters. The key should be prefixed with an
+                additional `text_encoder` to distinguish between unet lora layers.
+            network_alphas (`dict[str, float]`):
+                The value of the network alpha used for stable learning and preventing underflow. This value has the
+                same meaning as the `--network_alpha` option in the kohya-ss trainer script. Refer to [this
+                link](https://github.com/darkstorm2150/sd-scripts/blob/main/docs/train_network_README-en.md#execute-learning).
+            text_encoder (`CLIPTextModel`):
+                The text encoder model to load the LoRA layers into.
+            prefix (`str`):
+                Expected prefix of the `text_encoder` in the `state_dict`.
+            lora_scale (`float`):
+                How much to scale the output of the lora linear layer before it is added with the output of the regular
+                lora layer.
+            adapter_name (`str`, *optional*):
+                Adapter name to be used for referencing the loaded adapter model. If not specified, it will use
+                `default_{i}` where i is the total number of adapters being loaded.
+            low_cpu_mem_usage (`bool`, *optional*):
+                Speed up model loading by only loading the pretrained LoRA weights and not initializing the random
+                weights.
+            hotswap (`bool`, *optional*):
+                See [`~loaders.StableDiffusionLoraLoaderMixin.load_lora_weights`].
+            metadata (`dict`):
+                Optional LoRA adapter metadata. When supplied, the `LoraConfig` arguments of `peft` won't be derived
+                from the state dict.
+        """
+        _load_lora_into_text_encoder(
+            state_dict=state_dict,
+            network_alphas=None,
+            lora_scale=lora_scale,
+            text_encoder=text_encoder,
+            prefix=prefix,
+            text_encoder_name=cls.text_encoder_name,
+            adapter_name=adapter_name,
+            metadata=metadata,
+            _pipeline=_pipeline,
+            low_cpu_mem_usage=low_cpu_mem_usage,
+            hotswap=hotswap,
+        )
+
+    @classmethod
     # Copied from diffusers.loaders.lora_pipeline.CogVideoXLoraLoaderMixin.save_lora_weights
     def save_lora_weights(
         cls,
         save_directory: str | os.PathLike,
         transformer_lora_layers: dict[str, torch.nn.Module | torch.Tensor] = None,
+        text_encoder_lora_layers: dict[str, torch.nn.Module | torch.Tensor] = None,
         is_main_process: bool = True,
         weight_name: str = None,
         save_function: Callable = None,
         safe_serialization: bool = True,
         transformer_lora_adapter_metadata: dict | None = None,
+        text_encoder_lora_adapter_metadata: dict | None = None,
     ):
         r"""
         See [`~loaders.StableDiffusionLoraLoaderMixin.save_lora_weights`] for more information.
@@ -6238,6 +6308,10 @@ class Flux2LoraLoaderMixin(LoraBaseMixin):
         if transformer_lora_layers:
             lora_layers[cls.transformer_name] = transformer_lora_layers
             lora_metadata[cls.transformer_name] = transformer_lora_adapter_metadata
+
+        if text_encoder_lora_layers:
+            lora_layers[cls.text_encoder_name] = text_encoder_lora_layers
+            lora_metadata[cls.text_encoder_name] = text_encoder_lora_adapter_metadata
 
         if not lora_layers:
             raise ValueError("You must pass at least one of `transformer_lora_layers` or `text_encoder_lora_layers`.")
@@ -6273,7 +6347,7 @@ class Flux2LoraLoaderMixin(LoraBaseMixin):
         )
 
     # Copied from diffusers.loaders.lora_pipeline.CogVideoXLoraLoaderMixin.unfuse_lora
-    def unfuse_lora(self, components: list[str] = ["transformer"], **kwargs):
+    def unfuse_lora(self, components: list[str] = ["transformer", "text_encoder"], **kwargs):
         r"""
         See [`~loaders.StableDiffusionLoraLoaderMixin.unfuse_lora`] for more details.
         """
