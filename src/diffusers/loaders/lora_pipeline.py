@@ -6071,8 +6071,9 @@ class Flux2LoraLoaderMixin(LoraBaseMixin):
     Load LoRA layers into [`Flux2Transformer2DModel`]. Specific to [`Flux2Pipeline`].
     """
 
-    _lora_loadable_modules = ["transformer"]
+    _lora_loadable_modules = ["transformer", "text_encoder"]
     transformer_name = TRANSFORMER_NAME
+    text_encoder_name = TEXT_ENCODER_NAME
 
     @classmethod
     @validate_hf_hub_args
