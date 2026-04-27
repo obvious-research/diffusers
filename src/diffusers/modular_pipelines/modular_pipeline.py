@@ -2353,6 +2353,8 @@ class ModularPipeline(ConfigMixin, PushToHubMixin):
              - if potentially override ComponentSpec if passed a different loading field in kwargs, e.g.
                `pretrained_model_name_or_path`, `variant`, `revision`, etc.
         """
+        from ..quantizers import PipelineQuantizationConfig
+        from ..utils import is_transformers_available
 
         if names is None:
             names = [
@@ -2387,6 +2389,30 @@ class ModularPipeline(ConfigMixin, PushToHubMixin):
                     elif "default" in value:
                         # check if the default is specified
                         component_load_kwargs[key] = value["default"]
+
+            quantization_config = component_load_kwargs.get("quantization_config")
+            if isinstance(quantization_config, PipelineQuantizationConfig):
+                model_quant_config = None
+                if isinstance(spec.type_hint, type) and issubclass(spec.type_hint, torch.nn.Module):
+                    from ..models.modeling_utils import ModelMixin
+
+                    is_diffusers_model = issubclass(spec.type_hint, ModelMixin)
+                    is_transformers_model = False
+                    if is_transformers_available():
+                        from transformers import PreTrainedModel
+
+                        is_transformers_model = issubclass(spec.type_hint, PreTrainedModel)
+
+                    if is_diffusers_model or is_transformers_model:
+                        model_quant_config = quantization_config._resolve_quant_config(
+                            is_diffusers=is_diffusers_model, module_name=name
+                        )
+
+                if model_quant_config is not None:
+                    component_load_kwargs["quantization_config"] = model_quant_config
+                else:
+                    component_load_kwargs.pop("quantization_config", None)
+
             # Only pass trust_remote_code to components from the same repo as the pipeline.
             # When a user passes trust_remote_code=True, they intend to trust code from the
             # pipeline's repo, not from external repos referenced in modular_model_index.json.

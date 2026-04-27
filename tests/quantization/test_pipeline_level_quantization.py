@@ -20,6 +20,7 @@ import torch
 from parameterized import parameterized
 
 from diffusers import BitsAndBytesConfig, DiffusionPipeline, QuantoConfig
+from diffusers.modular_pipelines import ModularPipeline
 from diffusers.quantizers import PipelineQuantizationConfig
 from diffusers.utils import logging
 
@@ -50,6 +51,7 @@ else:
 @slow
 class PipelineQuantizationTests(unittest.TestCase):
     model_name = "hf-internal-testing/tiny-flux-pipe"
+    modular_model_name = "hf-internal-testing/tiny-flux-modular"
     prompt = "a beautiful sunset amidst the mountains."
     num_inference_steps = 10
     seed = 0
@@ -78,6 +80,31 @@ class PipelineQuantizationTests(unittest.TestCase):
                 self.assertTrue(quantization_config.quant_method == "bitsandbytes")
 
         _ = pipe(self.prompt, num_inference_steps=self.num_inference_steps)
+
+    def test_modular_pipeline_load_components_resolves_quant_config(self):
+        components_to_quantize = ["transformer", "text_encoder_2"]
+        quant_config = PipelineQuantizationConfig(
+            quant_backend="bitsandbytes_4bit",
+            quant_kwargs={
+                "load_in_4bit": True,
+                "bnb_4bit_quant_type": "nf4",
+                "bnb_4bit_compute_dtype": torch.bfloat16,
+            },
+            components_to_quantize=components_to_quantize,
+        )
+
+        pipe = ModularPipeline.from_pretrained(self.modular_model_name)
+        pipe.load_components(
+            quantization_config=quant_config,
+            torch_dtype=torch.bfloat16,
+        )
+
+        for name in components_to_quantize:
+            component = getattr(pipe, name)
+            self.assertTrue(getattr(component.config, "quantization_config", None) is not None)
+            component_quant_config = component.config.quantization_config
+            self.assertTrue(component_quant_config.load_in_4bit)
+            self.assertTrue(component_quant_config.quant_method == "bitsandbytes")
 
     def test_quant_config_set_correctly_through_granular(self):
         quant_config = PipelineQuantizationConfig(
