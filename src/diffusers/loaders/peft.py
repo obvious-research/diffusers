@@ -18,13 +18,11 @@ import os
 from collections import defaultdict
 from functools import partial
 from pathlib import Path
-from typing import List, Literal, Union
+from typing import Literal
 
 import safetensors
 import torch
 
-from peft.tuners.lora import LoraLayer
-from peft.tuners.tuners_utils import BaseTunerLayer
 from ..hooks.group_offloading import _maybe_remove_and_reapply_group_offloading
 from ..utils import (
     MIN_PEFT_VERSION,
@@ -831,6 +829,8 @@ class PeftAdapterMixin:
     @staticmethod
     # Store at module level for all LoRA layers to access
     def set_terra_t_recursive(module, terra_t, adapter=None):
+        from peft.tuners.lora import LoraLayer
+
         # Convert to tensor if needed
         if isinstance(terra_t, list):
             terra_t = torch.tensor(terra_t)
@@ -844,8 +844,7 @@ class PeftAdapterMixin:
         for child in module.children():
             PeftAdapterMixin.set_terra_t_recursive(child, terra_t, adapter)
 
-
-    def set_terra_t(self, terra_t: Union[float, torch.Tensor, List[float]], adapter):
+    def set_terra_t(self, terra_t: float | torch.Tensor | list[float], adapter):
         """
         Set the time parameter for Terra (time-varying LoRA) adapters.
 

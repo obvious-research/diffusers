@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import os
-from typing import Callable, Dict
+from typing import Callable
 
 import torch
 from huggingface_hub.utils import validate_hf_hub_args
@@ -1826,17 +1826,17 @@ class FluxLoraLoaderMixin(LoraBaseMixin):
 
     @classmethod
     def load_lora_into_text_encoder_2(
-            cls,
-            state_dict,
-            network_alphas,
-            text_encoder,
-            prefix=None,
-            lora_scale=1.0,
-            adapter_name=None,
-            _pipeline=None,
-            low_cpu_mem_usage=False,
-            hotswap: bool = False,
-            metadata=None,
+        cls,
+        state_dict,
+        network_alphas,
+        text_encoder,
+        prefix=None,
+        lora_scale=1.0,
+        adapter_name=None,
+        _pipeline=None,
+        low_cpu_mem_usage=False,
+        hotswap: bool = False,
+        metadata=None,
     ):
         """
         This will load the LoRA layers specified in `state_dict` into `text_encoder_2` (usually T5).
@@ -1858,13 +1858,12 @@ class FluxLoraLoaderMixin(LoraBaseMixin):
         )
 
     @classmethod
-    # Copied from diffusers.loaders.lora_pipeline.StableDiffusionLoraLoaderMixin.save_lora_weights with unet->transformer
     def save_lora_weights(
         cls,
         save_directory: str | os.PathLike,
         transformer_lora_layers: dict[str, torch.nn.Module | torch.Tensor] = None,
         text_encoder_lora_layers: dict[str, torch.nn.Module] = None,
-        text_encoder_2_lora_layers: Dict[str, torch.nn.Module] = None,
+        text_encoder_2_lora_layers: dict[str, torch.nn.Module] = None,
         is_main_process: bool = True,
         weight_name: str = None,
         save_function: Callable = None,
@@ -5895,7 +5894,6 @@ class Flux2LoraLoaderMixin(LoraBaseMixin):
         return out
 
     @require_peft_backend
-    # Copied from diffusers.loaders.lora_pipeline.CogVideoXLoraLoaderMixin.load_lora_weights
     def load_lora_weights(
         self,
         pretrained_model_name_or_path_or_dict: str | dict[str, torch.Tensor],
@@ -5932,7 +5930,9 @@ class Flux2LoraLoaderMixin(LoraBaseMixin):
 
         self.load_lora_into_text_encoder(
             state_dict,
-            text_encoder=getattr(self, self.text_encoder_name) if not hasattr(self, "text_encoder") else self.text_encoder,
+            text_encoder=getattr(self, self.text_encoder_name)
+            if not hasattr(self, "text_encoder")
+            else self.text_encoder,
             adapter_name=adapter_name,
             metadata=metadata,
             _pipeline=self,
@@ -5968,18 +5968,17 @@ class Flux2LoraLoaderMixin(LoraBaseMixin):
         )
 
     @classmethod
-    # Copied from diffusers.loaders.lora_pipeline.StableDiffusionLoraLoaderMixin.load_lora_into_text_encoder
     def load_lora_into_text_encoder(
-            cls,
-            state_dict,
-            text_encoder,
-            prefix=None,
-            lora_scale=1.0,
-            adapter_name=None,
-            _pipeline=None,
-            low_cpu_mem_usage=False,
-            hotswap: bool = False,
-            metadata=None,
+        cls,
+        state_dict,
+        text_encoder,
+        prefix=None,
+        lora_scale=1.0,
+        adapter_name=None,
+        _pipeline=None,
+        low_cpu_mem_usage=False,
+        hotswap: bool = False,
+        metadata=None,
     ):
         """
         This will load the LoRA layers specified in `state_dict` into `text_encoder`
@@ -6026,7 +6025,6 @@ class Flux2LoraLoaderMixin(LoraBaseMixin):
         )
 
     @classmethod
-    # Copied from diffusers.loaders.lora_pipeline.CogVideoXLoraLoaderMixin.save_lora_weights
     def save_lora_weights(
         cls,
         save_directory: str | os.PathLike,

@@ -27,8 +27,13 @@ from transformers import (
 )
 
 from ...image_processor import PipelineImageInput, VaeImageProcessor
-from ...loaders import FluxIPAdapterMixin, FluxLoraLoaderMixin, FromSingleFileMixin, TextualInversionLoaderMixin, \
-    PeftAdapterMixin
+from ...loaders import (
+    FluxIPAdapterMixin,
+    FluxLoraLoaderMixin,
+    FromSingleFileMixin,
+    PeftAdapterMixin,
+    TextualInversionLoaderMixin,
+)
 from ...models import AutoencoderKL, FluxTransformer2DModel
 from ...schedulers import FlowMatchEulerDiscreteScheduler
 from ...utils import (
@@ -598,7 +603,14 @@ class FluxPipeline(
     def interrupt(self):
         return self._interrupt
 
-    def set_terra_t(self, terra_t: Union[float, torch.Tensor, List[float]], adapter: Optional[str] = None, batch_size=None, num_images_per_prompt=None, do_true_cfg=False):
+    def set_terra_t(
+        self,
+        terra_t: float | torch.Tensor | list[float],
+        adapter: str | None = None,
+        batch_size=None,
+        num_images_per_prompt=None,
+        do_true_cfg=False,
+    ):
         """
         Set the time parameter for Terra (time-varying LoRA) adapters on the UNet.
 
@@ -625,7 +637,6 @@ class FluxPipeline(
             ```
         """
 
-
         if terra_t is not None:
             if isinstance(terra_t, (float, int)):
                 terra_t = [terra_t]
@@ -645,8 +656,10 @@ class FluxPipeline(
                 expected_batch_size = batch_size * num_images_per_prompt * cfg_batch_multiplier
 
                 if terra_t.shape[0] != expected_batch_size:
-                    raise ValueError(f"Invalid shape for terra_t: {terra_t.shape}, expected {expected_batch_size},",
-                                     "terra_t should be same lenght as num_images_per_prompt")
+                    raise ValueError(
+                        f"Invalid shape for terra_t: {terra_t.shape}, expected {expected_batch_size},",
+                        "terra_t should be same lenght as num_images_per_prompt",
+                    )
                 self.transformer.set_terra_t(terra_t, adapter=adapter)
             else:
                 logger.warning(
@@ -654,7 +667,7 @@ class FluxPipeline(
                     "Skipping time parameter setting for Terra adapters."
                 )
 
-    def clear_terra_t(self, adapter: Optional[str] = None):
+    def clear_terra_t(self, adapter: str | None = None):
         """
         Clear the time parameter for Terra adapters on the UNet.
 
@@ -677,23 +690,17 @@ class FluxPipeline(
         if hasattr(self.transformer, "clear_terra_t"):
             self.transformer.clear_terra_t(adapter=adapter)
         else:
-            logger.warning(
-                "Transformer does not have clear_terra_t method."
-            )
+            logger.warning("Transformer does not have clear_terra_t method.")
 
         if hasattr(self.text_encoder, "clear_terra_t"):
             self.text_encoder.clear_terra_t(adapter=adapter)
         else:
-            logger.warning(
-                "Text encoder does not have clear_terra_t method. Make sure Terra adapters are loaded."
-            )
+            logger.warning("Text encoder does not have clear_terra_t method. Make sure Terra adapters are loaded.")
 
         if hasattr(self.text_encoder_2, "clear_terra_t"):
             self.text_encoder_2.clear_terra_t(adapter=adapter)
         else:
-            logger.warning(
-                "Text encoder 2 does not have clear_terra_t method. Make sure Terra adapters are loaded."
-            )
+            logger.warning("Text encoder 2 does not have clear_terra_t method. Make sure Terra adapters are loaded.")
 
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
@@ -726,7 +733,7 @@ class FluxPipeline(
         callback_on_step_end: Callable[[int, int], None] | None = None,
         callback_on_step_end_tensor_inputs: list[str] = ["latents"],
         max_sequence_length: int = 512,
-        terra_t: Optional[Union[float, torch.Tensor, List[float]]] = None,
+        terra_t: float | torch.Tensor | list[float] | None = None,
     ) -> FluxPipelineOutput | tuple:
         r"""
         Function invoked when calling the pipeline for generation.
@@ -878,14 +885,16 @@ class FluxPipeline(
 
         if terra_t is not None:
             if (isinstance(terra_t, list) and len(terra_t) != batch_size) or (
-                    isinstance(terra_t, torch.Tensor) and terra_t.shape[0] != batch_size):
+                isinstance(terra_t, torch.Tensor) and terra_t.shape[0] != batch_size
+            ):
                 raise ValueError(
                     f"You have passed a list of generators of length {len(terra_t)}, but requested an effective batch"
                     f" size of {batch_size}. Make sure the batch size matches the length of the generators."
                 )
 
-            self.set_terra_t(terra_t, batch_size=batch_size, num_images_per_prompt=num_images_per_prompt,
-                             do_true_cfg=do_true_cfg)
+            self.set_terra_t(
+                terra_t, batch_size=batch_size, num_images_per_prompt=num_images_per_prompt, do_true_cfg=do_true_cfg
+            )
 
         (
             prompt_embeds,
