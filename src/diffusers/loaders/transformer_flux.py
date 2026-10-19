@@ -13,8 +13,9 @@
 # limitations under the License.
 from contextlib import nullcontext
 
+import torch
+
 from ..models.embeddings import (
-    ImageProjection,
     MultiIPAdapterImageProjection,
 )
 from ..models.model_loading_utils import load_model_dict_into_meta
@@ -28,7 +29,6 @@ if is_accelerate_available():
 
 logger = logging.get_logger(__name__)
 
-import torch
 
 class MLPProjModel(torch.nn.Module):
     def __init__(self, cross_attention_dim=768, image_embed_dim=512, num_image_text_embeds=4):
@@ -49,6 +49,7 @@ class MLPProjModel(torch.nn.Module):
         x = x.reshape(-1, self.num_image_text_embeds, self.cross_attention_dim)
         x = self.norm(x)
         return x
+
 
 class FluxTransformer2DLoadersMixin:
     """
@@ -98,7 +99,7 @@ class FluxTransformer2DLoadersMixin:
                 )
 
             for key, value in state_dict.items():
-                #diffusers_name = key.replace("proj", "image_embeds")
+                # diffusers_name = key.replace("proj", "image_embeds")
                 updated_state_dict[key] = value
 
         if not low_cpu_mem_usage:
@@ -167,8 +168,8 @@ class FluxTransformer2DLoadersMixin:
                 for i, state_dict in enumerate(state_dicts):
                     value_dict.update({f"to_k_ip.{i}.weight": state_dict["ip_adapter"][f"{key_id}.to_k_ip.weight"]})
                     value_dict.update({f"to_v_ip.{i}.weight": state_dict["ip_adapter"][f"{key_id}.to_v_ip.weight"]})
-                    #value_dict.update({f"to_k_ip.{i}.bias": state_dict["ip_adapter"][f"{key_id}.to_k_ip.bias"]})
-                    #value_dict.update({f"to_v_ip.{i}.bias": state_dict["ip_adapter"][f"{key_id}.to_v_ip.bias"]})
+                    # value_dict.update({f"to_k_ip.{i}.bias": state_dict["ip_adapter"][f"{key_id}.to_k_ip.bias"]})
+                    # value_dict.update({f"to_v_ip.{i}.bias": state_dict["ip_adapter"][f"{key_id}.to_v_ip.bias"]})
 
                 if not low_cpu_mem_usage:
                     attn_procs[name].load_state_dict(value_dict)
