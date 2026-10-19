@@ -12,18 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 from typing import Any, Callable, Dict, List, Optional, Union
 
-import math
 import numpy as np
 import torch
 import tqdm
 
 from diffusers import FluxPipeline
 
-
-from .pipeline_flux import retrieve_timesteps
-from .pipeline_flux_regional import calculate_shift
 from ...image_processor import PipelineImageInput
 from ...utils import (
     is_torch_xla_available,
@@ -31,6 +28,8 @@ from ...utils import (
     replace_example_docstring,
 )
 from ...utils.torch_utils import randn_tensor
+from .pipeline_flux import retrieve_timesteps
+from .pipeline_flux_regional import calculate_shift
 from .pipeline_output import FluxPipelineOutput
 
 
@@ -60,8 +59,8 @@ EXAMPLE_DOC_STRING = """
         ```
 """
 
-class TBLR:
 
+class TBLR:
     def __init__(self, top, bottom, left, right):
         self.top = top
         self.bottom = bottom
@@ -78,7 +77,6 @@ class TBLR:
 
 
 class Tile:
-
     def __init__(self, coords: TBLR, overlap: TBLR, weight=None):
         self.coords = coords
         self.overlap = overlap
@@ -97,24 +95,22 @@ class Tile:
 
 
 class FluxPanoramaPipeline(FluxPipeline):
-
     @staticmethod
     def generate_weight_matrix(tile: Tile, device: torch.device):
-
         weight_matrix = torch.ones((tile.height, tile.width), device=device)
 
         if tile.overlap.left > 0:
             gradient_left = torch.linspace(0, 1, tile.overlap.left, device=device)
-            weight_matrix[:, :tile.overlap.left] *= gradient_left.view(1, -1)
+            weight_matrix[:, : tile.overlap.left] *= gradient_left.view(1, -1)
         if tile.overlap.top > 0:
             gradient_top = torch.linspace(0, 1, tile.overlap.top, device=device)
-            weight_matrix[:tile.overlap.top, :] *= gradient_top.view(-1, 1)
+            weight_matrix[: tile.overlap.top, :] *= gradient_top.view(-1, 1)
         if tile.overlap.right > 0:
             gradient_right = torch.linspace(1, 0, tile.overlap.right, device=device)
-            weight_matrix[:, -tile.overlap.right:] *= gradient_right.view(1, -1)
+            weight_matrix[:, -tile.overlap.right :] *= gradient_right.view(1, -1)
         if tile.overlap.bottom > 0:
             gradient_bottom = torch.linspace(1, 0, tile.overlap.bottom, device=device)
-            weight_matrix[-tile.overlap.bottom:, :] *= gradient_bottom.view(-1, 1)
+            weight_matrix[-tile.overlap.bottom :, :] *= gradient_bottom.view(-1, 1)
 
         return weight_matrix
 
@@ -185,14 +181,14 @@ class FluxPanoramaPipeline(FluxPipeline):
         return tiles
 
     def calc_tiles_min_overlap(
-            self,
-            image_height: int,
-            image_width: int,
-            tile_height: int,
-            tile_width: int,
-            min_overlap_x: int = 0,
-            min_overlap_y: int = 0,
-            add_weight_matrix: bool = True,
+        self,
+        image_height: int,
+        image_width: int,
+        tile_height: int,
+        tile_width: int,
+        min_overlap_x: int = 0,
+        min_overlap_y: int = 0,
+        add_weight_matrix: bool = True,
     ) -> list[Tile]:
         """Calculate the tile coordinates for a given image shape under a simple tiling scheme with overlaps.
 
@@ -533,23 +529,25 @@ class FluxPanoramaPipeline(FluxPipeline):
             )
 
         latent_views = self.calc_tiles_min_overlap(
-            height // self.vae_scale_factor, width // self.vae_scale_factor,
+            height // self.vae_scale_factor,
+            width // self.vae_scale_factor,
             tile_height=height_generation // self.vae_scale_factor,
             tile_width=width_generation // self.vae_scale_factor,
             min_overlap_x=min_overlap_x // self.vae_scale_factor,
-            min_overlap_y=min_overlap_y // self.vae_scale_factor
+            min_overlap_y=min_overlap_y // self.vae_scale_factor,
         )
 
-        print('Number of views per diffusion step: ', len(latent_views))
+        print("Number of views per diffusion step: ", len(latent_views))
 
         latent_image_ids = self._prepare_latent_image_ids(
             batch_size,
             int(height_generation) // (self.vae_scale_factor * 2),
             int(width_generation) // (self.vae_scale_factor * 2),
             device,
-            prompt_embeds.dtype)
+            prompt_embeds.dtype,
+        )
 
-        views_batch = [latent_views[i: i + view_batch_size] for i in range(0, len(latent_views), view_batch_size)]
+        views_batch = [latent_views[i : i + view_batch_size] for i in range(0, len(latent_views), view_batch_size)]
 
         count = torch.zeros_like(latents)  # Tracks number of views for each latent position
         value = torch.zeros_like(latents)  # Accumulates the latent values for averaging
@@ -572,12 +570,13 @@ class FluxPanoramaPipeline(FluxPipeline):
                 value.zero_()
 
                 # Process each batch of views
-                for j, batch_view in tqdm.tqdm(enumerate(views_batch), total=len(views_batch), position=1, leave=False):
-
+                for j, batch_view in tqdm.tqdm(
+                    enumerate(views_batch), total=len(views_batch), position=1, leave=False
+                ):
                     # Get latents for the current views
                     latents_for_view = torch.cat(
                         [
-                            latents[:, :, tile.coords.top:tile.coords.bottom, tile.coords.left:tile.coords.right]
+                            latents[:, :, tile.coords.top : tile.coords.bottom, tile.coords.left : tile.coords.right]
                             for tile in batch_view
                         ]
                     )
@@ -587,7 +586,7 @@ class FluxPanoramaPipeline(FluxPipeline):
                         latents_for_view.shape[0],
                         num_channels_latents,
                         height_generation // self.vae_scale_factor,
-                        width_generation // self.vae_scale_factor
+                        width_generation // self.vae_scale_factor,
                     )
 
                     if image_embeds is not None:
@@ -626,13 +625,17 @@ class FluxPanoramaPipeline(FluxPipeline):
                             )[0]
                         noise_pred = neg_noise_pred + true_cfg_scale * (noise_pred - neg_noise_pred)
 
-                    noise_pred_unpacked = self._unpack_latents(noise_pred, height_generation, width_generation, self.vae_scale_factor)
+                    noise_pred_unpacked = self._unpack_latents(
+                        noise_pred, height_generation, width_generation, self.vae_scale_factor
+                    )
                     # Accumulate the denoised results for each view
-                    for noise_pred_local, tile in zip(
-                            noise_pred_unpacked.chunk(view_batch_size), batch_view
-                    ):
-                        value[:, :, tile.coords.top:tile.coords.bottom, tile.coords.left:tile.coords.right] += noise_pred_local * tile.weight
-                        count[:, :, tile.coords.top:tile.coords.bottom, tile.coords.left:tile.coords.right] += tile.weight
+                    for noise_pred_local, tile in zip(noise_pred_unpacked.chunk(view_batch_size), batch_view):
+                        value[:, :, tile.coords.top : tile.coords.bottom, tile.coords.left : tile.coords.right] += (
+                            noise_pred_local * tile.weight
+                        )
+                        count[:, :, tile.coords.top : tile.coords.bottom, tile.coords.left : tile.coords.right] += (
+                            tile.weight
+                        )
 
                 # Average the noise_pred using the accumulated values and counts
                 # compute the previous noisy sample x_t -> x_t-1
@@ -658,7 +661,13 @@ class FluxPanoramaPipeline(FluxPipeline):
         self._current_timestep = None
 
         if output_type == "latent":
-            latents = self._pack_latents(latents,  batch_size, num_channels_latents, 2 * (int(height) // (self.vae_scale_factor * 2)), 2 * (int(width) // (self.vae_scale_factor * 2)))
+            latents = self._pack_latents(
+                latents,
+                batch_size,
+                num_channels_latents,
+                2 * (int(height) // (self.vae_scale_factor * 2)),
+                2 * (int(width) // (self.vae_scale_factor * 2)),
+            )
             image = latents
         else:
             latents = (latents / self.vae.config.scaling_factor) + self.vae.config.shift_factor

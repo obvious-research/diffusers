@@ -12,38 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import inspect
-from typing import Any, Callable, Dict, List, Optional, Union, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
 import tqdm
-from transformers import (
-    CLIPImageProcessor,
-    CLIPTextModel,
-    CLIPTokenizer,
-    CLIPVisionModelWithProjection,
-    T5EncoderModel,
-    T5TokenizerFast,
-)
 
-from .pipeline_flux import calculate_shift, retrieve_timesteps
 from ... import FluxPanoramaPipeline, FluxRegionalPipeline
-from ...image_processor import PipelineImageInput, VaeImageProcessor
-from ...loaders import FluxIPAdapterMixin, FluxLoraLoaderMixin, FromSingleFileMixin, TextualInversionLoaderMixin
-from ...models import AutoencoderKL, FluxTransformer2DModel
-from ...schedulers import FlowMatchEulerDiscreteScheduler
+from ...image_processor import PipelineImageInput
 from ...utils import (
-    USE_PEFT_BACKEND,
-    deprecate,
     is_torch_xla_available,
     logging,
     replace_example_docstring,
-    scale_lora_layers,
-    unscale_lora_layers,
 )
-from ...utils.torch_utils import randn_tensor
-from ..pipeline_utils import DiffusionPipeline
+from .pipeline_flux import calculate_shift, retrieve_timesteps
 from .pipeline_output import FluxPipelineOutput
 
 
@@ -75,14 +57,13 @@ EXAMPLE_DOC_STRING = """
 
 
 class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
-
     def check_inputs(
         self,
         prompt,
         prompt_2,
         height,
         width,
-        regional_area: Optional[torch.Tensor]=None,
+        regional_area: Optional[torch.Tensor] = None,
         negative_prompt=None,
         negative_prompt_2=None,
         prompt_embeds=None,
@@ -104,11 +85,13 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
             pooled_prompt_embeds=pooled_prompt_embeds,
             negative_pooled_prompt_embeds=negative_pooled_prompt_embeds,
             callback_on_step_end_tensor_inputs=callback_on_step_end_tensor_inputs,
-            max_sequence_length=max_sequence_length)
+            max_sequence_length=max_sequence_length,
+        )
 
         if regional_area is not None and regional_area.shape != (height, width):
-            raise ValueError(f"`regional_area` must be of shape {(height, width)} (same as `height` and `width`) but is {regional_area.shape}.")
-
+            raise ValueError(
+                f"`regional_area` must be of shape {(height, width)} (same as `height` and `width`) but is {regional_area.shape}."
+            )
 
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
@@ -128,7 +111,7 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
         width_generation: Optional[int] = 1024,
         sigmas: Optional[List[float]] = None,
         regional_area: Optional[torch.FloatTensor] = None,
-        regional_prompts: Optional[Union[str, List[str],List[Tuple[str, str]]]] = None,
+        regional_prompts: Optional[Union[str, List[str], List[Tuple[str, str]]]] = None,
         regional_base_prompt_trick: bool = True,
         mask_inject_steps: int = 5,
         base_ratio: float = 0.25,
@@ -254,7 +237,7 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
             int(height_generation) // (self.vae_scale_factor * 2),
             int(width_generation) // (self.vae_scale_factor * 2),
             device,
-            prompt_embeds.dtype
+            prompt_embeds.dtype,
         )
 
         # 5. Prepare timesteps
@@ -319,7 +302,8 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
             )
 
         latent_views = self.calc_tiles_min_overlap(
-            height // self.vae_scale_factor, width // self.vae_scale_factor,
+            height // self.vae_scale_factor,
+            width // self.vae_scale_factor,
             tile_height=height_generation // self.vae_scale_factor,
             tile_width=width_generation // self.vae_scale_factor,
             min_overlap_x=min_overlap_x // self.vae_scale_factor,
@@ -331,7 +315,7 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
             int(height_generation) // (self.vae_scale_factor * 2),
             int(width_generation) // (self.vae_scale_factor * 2),
             device,
-            prompt_embeds.dtype
+            prompt_embeds.dtype,
         )
 
         count = torch.zeros_like(latents)  # Tracks number of views for each latent position
@@ -341,9 +325,9 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
 
         # TODO: split by regional_area  and compute mask for each area
         if regional_area is not None and regional_prompts is not None:
-
             regional_prompts_views = self.calc_tiles_min_overlap(
-                height, width,
+                height,
+                width,
                 tile_height=height_generation,
                 tile_width=width_generation,
                 min_overlap_x=min_overlap_x,
@@ -354,22 +338,22 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
             regional_prompt_embeds = []
             for regional_prompt in regional_prompts:
                 regional_prompt_embed, regional_pooled_prompt_embed, regional_text_id = self.encode_prompt(
-                     prompt=regional_prompt[1] if regional_base_prompt_trick else regional_prompt,
-                     prompt_2=regional_prompt[1] if regional_base_prompt_trick else regional_prompt,
-                     prompt_embeds=None,
-                     pooled_prompt_embeds=None,
-                     device=device,
-                     num_images_per_prompt=num_images_per_prompt,
-                     max_sequence_length=512,
-                     lora_scale=None
+                    prompt=regional_prompt[1] if regional_base_prompt_trick else regional_prompt,
+                    prompt_2=regional_prompt[1] if regional_base_prompt_trick else regional_prompt,
+                    prompt_embeds=None,
+                    pooled_prompt_embeds=None,
+                    device=device,
+                    num_images_per_prompt=num_images_per_prompt,
+                    max_sequence_length=max_sequence_length,
+                    lora_scale=None,
                 )
                 regional_prompt_embeds.append(regional_prompt_embed)
 
             H, W = height_generation // (self.vae_scale_factor * 2), width_generation // (self.vae_scale_factor * 2)
             hidden_seq_len = H * W
 
-            computed_regional_embeds=[]
-            computed_regional_attention_mask=[]
+            computed_regional_embeds = []
+            computed_regional_attention_mask = []
 
             computed_prompt_embeds = []
             computed_pooled_prompt_embeds = []
@@ -377,13 +361,16 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
             # TODO: reimplement view_batch_size based on the number of regions
 
             for j, rv in enumerate(regional_prompts_views):
-                regional_mask_view = regional_area[rv.coords.top:rv.coords.bottom, rv.coords.left:rv.coords.right]
+                regional_mask_view = regional_area[rv.coords.top : rv.coords.bottom, rv.coords.left : rv.coords.right]
 
-                interpolated_mask = torch.nn.functional.interpolate(
-                    regional_mask_view[None, None, :, :].half(),
-                    (H, W),
-                    mode='nearest-exact'
-                ).flatten().unsqueeze(1).to(dtype=torch.int8)
+                interpolated_mask = (
+                    torch.nn.functional.interpolate(
+                        regional_mask_view[None, None, :, :].half(), (H, W), mode="nearest-exact"
+                    )
+                    .flatten()
+                    .unsqueeze(1)
+                    .to(dtype=torch.int8)
+                )
 
                 # find all unique values in the mask
                 unique_values = torch.unique(interpolated_mask)
@@ -400,20 +387,21 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
                 computed_regional_embeds.append(local_regional_embeds)
                 encoder_seq_len = local_regional_embeds.shape[1]
 
-
                 if regional_base_prompt_trick:
                     selec_prompt = [regional_prompts[i][0] for i in unique_values]
-                    regional_base_prompt = prompt + ' with ' + ' and '.join(selec_prompt)
+                    regional_base_prompt = prompt + " with " + " and ".join(selec_prompt)
 
-                    regional_base_prompt_embed, regional_pooled_base_prompt_embed, regional_text_id = self.encode_prompt(
-                        prompt=regional_base_prompt,
-                        prompt_2=regional_base_prompt,
-                        prompt_embeds=None,
-                        pooled_prompt_embeds=None,
-                        device=device,
-                        num_images_per_prompt=num_images_per_prompt,
-                        max_sequence_length=512,
-                        lora_scale=None
+                    regional_base_prompt_embed, regional_pooled_base_prompt_embed, regional_text_id = (
+                        self.encode_prompt(
+                            prompt=regional_base_prompt,
+                            prompt_2=regional_base_prompt,
+                            prompt_embeds=None,
+                            pooled_prompt_embeds=None,
+                            device=device,
+                            num_images_per_prompt=num_images_per_prompt,
+                            max_sequence_length=max_sequence_length,
+                            lora_scale=None,
+                        )
                     )
                     computed_prompt_embeds.append(regional_base_prompt_embed)
                     computed_pooled_prompt_embeds.append(regional_pooled_base_prompt_embed)
@@ -425,13 +413,15 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
                 regional_attention_mask = torch.zeros(
                     (encoder_seq_len + hidden_seq_len, encoder_seq_len + hidden_seq_len),
                     device=masks[0].device,
-                    dtype=torch.bool
+                    dtype=torch.bool,
                 )
                 num_of_regions = len(masks)
                 each_prompt_seq_len = encoder_seq_len // num_of_regions
 
                 # initialize self-attended mask
-                self_attend_masks = torch.zeros((hidden_seq_len, hidden_seq_len), device=masks[0].device, dtype=torch.bool)
+                self_attend_masks = torch.zeros(
+                    (hidden_seq_len, hidden_seq_len), device=masks[0].device, dtype=torch.bool
+                )
 
                 # initialize union mask
                 union_masks = torch.zeros((hidden_seq_len, hidden_seq_len), device=masks[0].device, dtype=torch.bool)
@@ -439,33 +429,31 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
                 # handle each mask
                 for j in range(num_of_regions):
                     # txt attends to itself
-                    regional_attention_mask[j * each_prompt_seq_len:(j + 1) * each_prompt_seq_len,
-                    j * each_prompt_seq_len:(j + 1) * each_prompt_seq_len] = True
+                    regional_attention_mask[
+                        j * each_prompt_seq_len : (j + 1) * each_prompt_seq_len,
+                        j * each_prompt_seq_len : (j + 1) * each_prompt_seq_len,
+                    ] = True
 
                     # txt attends to corresponding regional img
-                    regional_attention_mask[j * each_prompt_seq_len:(j + 1) * each_prompt_seq_len, encoder_seq_len:] = masks[j].transpose(-1, -2)
+                    regional_attention_mask[
+                        j * each_prompt_seq_len : (j + 1) * each_prompt_seq_len, encoder_seq_len:
+                    ] = masks[j].transpose(-1, -2)
 
                     # regional img attends to corresponding txt
-                    regional_attention_mask[encoder_seq_len:, j * each_prompt_seq_len:(j + 1) * each_prompt_seq_len] = masks[j]
+                    regional_attention_mask[
+                        encoder_seq_len:, j * each_prompt_seq_len : (j + 1) * each_prompt_seq_len
+                    ] = masks[j]
 
                     # regional img attends to corresponding regional img
                     img_size_masks = masks[j][:, :1].repeat(1, hidden_seq_len)
                     img_size_masks_transpose = img_size_masks.transpose(-1, -2)
                     self_attend_masks = torch.logical_or(
-                        self_attend_masks,
-                        torch.logical_and(
-                            img_size_masks,
-                            img_size_masks_transpose
-                        )
+                        self_attend_masks, torch.logical_and(img_size_masks, img_size_masks_transpose)
                     )
 
                     # update union
                     union_masks = torch.logical_or(
-                        union_masks,
-                        torch.logical_or(
-                            img_size_masks,
-                            img_size_masks_transpose
-                        )
+                        union_masks, torch.logical_or(img_size_masks, img_size_masks_transpose)
                     )
 
                 background_masks = torch.logical_not(union_masks)
@@ -476,13 +464,22 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
 
                 computed_regional_attention_mask.append(regional_attention_mask)
 
-        if 'single_inject_blocks_interval' not in self.joint_attention_kwargs:
-            self.joint_attention_kwargs['single_inject_blocks_interval'] = len(self.transformer.single_transformer_blocks)
-        if 'double_inject_blocks_interval' not in self.joint_attention_kwargs:
-            self.joint_attention_kwargs['double_inject_blocks_interval'] = len(self.transformer.transformer_blocks)
+        if "single_inject_blocks_interval" not in self.joint_attention_kwargs:
+            self.joint_attention_kwargs["single_inject_blocks_interval"] = len(
+                self.transformer.single_transformer_blocks
+            )
+        if "double_inject_blocks_interval" not in self.joint_attention_kwargs:
+            self.joint_attention_kwargs["double_inject_blocks_interval"] = len(self.transformer.transformer_blocks)
 
-
-        views_inputs = list(zip(latent_views, computed_regional_embeds, computed_regional_attention_mask, computed_prompt_embeds, computed_pooled_prompt_embeds))
+        views_inputs = list(
+            zip(
+                latent_views,
+                computed_regional_embeds,
+                computed_regional_attention_mask,
+                computed_prompt_embeds,
+                computed_pooled_prompt_embeds,
+            )
+        )
 
         # 6. Denoising loop
         # We set the index here to remove DtoH sync, helpful especially during compilation.
@@ -490,7 +487,6 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
         self.scheduler.set_begin_index(0)
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for j, t in enumerate(timesteps):
-
                 if self.interrupt:
                     continue
 
@@ -501,20 +497,21 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
                 value.zero_()
 
                 # Process each batch of views
-                for j, (tile, regional_embeds, attention_mask, prompt_embeds, pooled_prompt_embeds) in tqdm.tqdm(
-                     enumerate(views_inputs),
-                     total=len(latent_views),
-                     position=1,
-                     leave=False
-                ):
+                for tile_index, (
+                    tile,
+                    regional_embeds,
+                    attention_mask,
+                    prompt_embeds,
+                    pooled_prompt_embeds,
+                ) in tqdm.tqdm(enumerate(views_inputs), total=len(latent_views), position=1, leave=False):
                     if j < mask_inject_steps:
                         chosen_prompt_embeds = regional_embeds
-                        self.joint_attention_kwargs['base_ratio'] = base_ratio
-                        self.joint_attention_kwargs['regional_attention_mask'] = attention_mask.to(device)
+                        self.joint_attention_kwargs["base_ratio"] = base_ratio
+                        self.joint_attention_kwargs["regional_attention_mask"] = attention_mask.to(device)
                     else:
                         chosen_prompt_embeds = prompt_embeds
-                        self.joint_attention_kwargs['base_ratio'] = None
-                        self.joint_attention_kwargs['regional_attention_mask'] = None
+                        self.joint_attention_kwargs["base_ratio"] = None
+                        self.joint_attention_kwargs["regional_attention_mask"] = None
 
                     # Get latents for the current views
                     h_start, h_end = tile.coords.top, tile.coords.bottom
@@ -526,14 +523,14 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
                         latents_for_view.shape[0],
                         num_channels_latents,
                         height_generation // self.vae_scale_factor,
-                        width_generation // self.vae_scale_factor
+                        width_generation // self.vae_scale_factor,
                     )
 
                     if image_embeds is not None:
                         self._joint_attention_kwargs["ip_adapter_image_embeds"] = image_embeds
 
                     # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
-                    timestep = t.expand(1).to(latents.dtype) # was t.expand(view_batch_size).to(latents.dtype)
+                    timestep = t.expand(1).to(latents.dtype)  # was t.expand(view_batch_size).to(latents.dtype)
 
                     with self.transformer.cache_context("cond"):
                         noise_pred = self.transformer(
@@ -553,25 +550,27 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
                         if negative_image_embeds is not None:
                             self._joint_attention_kwargs["ip_adapter_image_embeds"] = negative_image_embeds
 
+                        uncond_joint_attention_kwargs = {
+                            **self.joint_attention_kwargs,
+                            "base_ratio": None,
+                            "regional_attention_mask": None,
+                        }
                         with self.transformer.cache_context("uncond"):
                             neg_noise_pred = self.transformer(
                                 hidden_states=latents_for_view,
                                 timestep=timestep / 1000,
                                 guidance=guidance,
                                 pooled_projections=negative_pooled_prompt_embeds,
-                                encoder_hidden_states=choosen_negative_prompt_embeds,
+                                encoder_hidden_states=negative_prompt_embeds,
                                 encoder_hidden_states_base=negative_prompt_embeds,
                                 txt_ids=negative_text_ids,
                                 img_ids=latent_image_ids,
-                                joint_attention_kwargs=self.joint_attention_kwargs,
+                                joint_attention_kwargs=uncond_joint_attention_kwargs,
                                 return_dict=False,
                             )[0]
                             noise_pred = neg_noise_pred + true_cfg_scale * (noise_pred - neg_noise_pred)
                     noise_pred_unpacked = self._unpack_latents(
-                        noise_pred,
-                        height_generation,
-                        width_generation,
-                        self.vae_scale_factor
+                        noise_pred, height_generation, width_generation, self.vae_scale_factor
                     )
 
                     # Accumulate the denoised result
@@ -602,9 +601,13 @@ class FluxPanoramaRegionalPipeline(FluxPanoramaPipeline, FluxRegionalPipeline):
         self._current_timestep = None
 
         if output_type == "latent":
-            latents = self._pack_latents(latents, batch_size, num_channels_latents,
-                                      2 * (int(height) // (self.vae_scale_factor * 2)),
-                                      2 * (int(width) // (self.vae_scale_factor * 2)))
+            latents = self._pack_latents(
+                latents,
+                batch_size,
+                num_channels_latents,
+                2 * (int(height) // (self.vae_scale_factor * 2)),
+                2 * (int(width) // (self.vae_scale_factor * 2)),
+            )
             image = latents
         else:
             latents = (latents / self.vae.config.scaling_factor) + self.vae.config.shift_factor

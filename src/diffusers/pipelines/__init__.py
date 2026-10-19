@@ -729,11 +729,11 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
             FluxInpaintPipeline,
             FluxKontextInpaintPipeline,
             FluxKontextPipeline,
-            FluxPipeline,
             FluxPanoramaPipeline,
-            FluxRegionalPipeline,
             FluxPanoramaRegionalPipeline,
+            FluxPipeline,
             FluxPriorReduxPipeline,
+            FluxRegionalPipeline,
             ReduxImageEncoder,
         )
         from .flux2 import Flux2KleinInpaintPipeline, Flux2KleinKVPipeline, Flux2KleinPipeline, Flux2Pipeline

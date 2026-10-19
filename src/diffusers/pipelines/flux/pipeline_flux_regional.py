@@ -25,7 +25,6 @@ from transformers import (
     T5TokenizerFast,
 )
 
-from .pipeline_flux import retrieve_timesteps, calculate_shift
 from ... import FluxPipeline
 from ...image_processor import PipelineImageInput
 from ...models import AutoencoderKL, FluxTransformer2DModel
@@ -36,6 +35,7 @@ from ...utils import (
     logging,
     replace_example_docstring,
 )
+from .pipeline_flux import calculate_shift, retrieve_timesteps
 from .pipeline_output import FluxPipelineOutput
 
 
@@ -67,7 +67,6 @@ EXAMPLE_DOC_STRING = """
 
 
 class FluxRegionalPipeline(FluxPipeline):
-
     def __init__(
         self,
         scheduler: FlowMatchEulerDiscreteScheduler,
@@ -80,10 +79,9 @@ class FluxRegionalPipeline(FluxPipeline):
         image_encoder: CLIPVisionModelWithProjection = None,
         feature_extractor: CLIPImageProcessor = None,
     ):
-
         attn_procs = {}
         for name in transformer.attn_processors.keys():
-            if 'transformer_blocks' in name and name.endswith("attn.processor"):
+            if "transformer_blocks" in name and name.endswith("attn.processor"):
                 attn_procs[name] = FluxRegionalAttnProcessor()
             else:
                 attn_procs[name] = transformer.attn_processors[name]
@@ -98,44 +96,44 @@ class FluxRegionalPipeline(FluxPipeline):
             tokenizer_2,
             transformer,
             image_encoder,
-            feature_extractor)
-
+            feature_extractor,
+        )
 
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
-            self,
-            prompt: Union[str, List[str]] = None,
-            prompt_2: Optional[Union[str, List[str]]] = None,
-            negative_prompt: Union[str, List[str]] = None,
-            negative_prompt_2: Optional[Union[str, List[str]]] = None,
-            true_cfg_scale: float = 1.0,
-            height: Optional[int] = None,
-            width: Optional[int] = None,
-            num_inference_steps: int = 28,
-            sigmas: Optional[List[float]] = None,
-            guidance_scale: float = 3.5,
-            regional_area: Optional[torch.FloatTensor] = None,
-            regional_prompts: Optional[Union[str, List[str]]] = None,
-            mask_inject_steps: int = 5,
-            base_ratio: float = 0.25,
-            num_images_per_prompt: Optional[int] = 1,
-            generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
-            latents: Optional[torch.FloatTensor] = None,
-            prompt_embeds: Optional[torch.FloatTensor] = None,
-            pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
-            ip_adapter_image: Optional[PipelineImageInput] = None,
-            ip_adapter_image_embeds: Optional[List[torch.Tensor]] = None,
-            negative_ip_adapter_image: Optional[PipelineImageInput] = None,
-            negative_ip_adapter_image_embeds: Optional[List[torch.Tensor]] = None,
-            negative_prompt_embeds: Optional[torch.FloatTensor] = None,
-            negative_pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
-            output_type: Optional[str] = "pil",
-            return_dict: bool = True,
-            joint_attention_kwargs: Optional[Dict[str, Any]] = None,
-            callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
-            callback_on_step_end_tensor_inputs: List[str] = ["latents"],
-            max_sequence_length: int = 512,
+        self,
+        prompt: Union[str, List[str]] = None,
+        prompt_2: Optional[Union[str, List[str]]] = None,
+        negative_prompt: Union[str, List[str]] = None,
+        negative_prompt_2: Optional[Union[str, List[str]]] = None,
+        true_cfg_scale: float = 1.0,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
+        num_inference_steps: int = 28,
+        sigmas: Optional[List[float]] = None,
+        guidance_scale: float = 3.5,
+        regional_area: Optional[torch.FloatTensor] = None,
+        regional_prompts: Optional[Union[str, List[str]]] = None,
+        mask_inject_steps: int = 5,
+        base_ratio: float = 0.25,
+        num_images_per_prompt: Optional[int] = 1,
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+        latents: Optional[torch.FloatTensor] = None,
+        prompt_embeds: Optional[torch.FloatTensor] = None,
+        pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
+        ip_adapter_image: Optional[PipelineImageInput] = None,
+        ip_adapter_image_embeds: Optional[List[torch.Tensor]] = None,
+        negative_ip_adapter_image: Optional[PipelineImageInput] = None,
+        negative_ip_adapter_image_embeds: Optional[List[torch.Tensor]] = None,
+        negative_prompt_embeds: Optional[torch.FloatTensor] = None,
+        negative_pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
+        output_type: Optional[str] = "pil",
+        return_dict: bool = True,
+        joint_attention_kwargs: Optional[Dict[str, Any]] = None,
+        callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
+        callback_on_step_end_tensor_inputs: List[str] = ["latents"],
+        max_sequence_length: int = 512,
     ):
         r"""
         Function invoked when calling the pipeline for generation.
@@ -395,7 +393,7 @@ class FluxRegionalPipeline(FluxPipeline):
                     pooled_prompt_embeds=None,
                     device=device,
                     num_images_per_prompt=num_images_per_prompt,
-                    max_sequence_length=512,
+                    max_sequence_length=max_sequence_length,
                     lora_scale=None,
                 )
 
@@ -409,11 +407,12 @@ class FluxRegionalPipeline(FluxPipeline):
         hidden_seq_len = H * W
         for mask, cond in regional_inputs:
             if mask is not None:  # resize regional masks to image size, the flatten is to match the seq len
-                mask = torch.nn.functional.interpolate(
-                    mask[None, None, :, :],
-                    (H, W),
-                    mode='nearest-exact'
-                ).flatten().unsqueeze(1).repeat(1, cond.size(1))
+                mask = (
+                    torch.nn.functional.interpolate(mask[None, None, :, :], (H, W), mode="nearest-exact")
+                    .flatten()
+                    .unsqueeze(1)
+                    .repeat(1, cond.size(1))
+                )
             else:
                 mask = torch.ones((H * W, cond.size(1))).to(device=cond.device)
             masks.append(mask)
@@ -425,7 +424,7 @@ class FluxRegionalPipeline(FluxPipeline):
         regional_attention_mask = torch.zeros(
             (encoder_seq_len + hidden_seq_len, encoder_seq_len + hidden_seq_len),
             device=masks[0].device,
-            dtype=torch.bool
+            dtype=torch.bool,
         )
         num_of_regions = len(masks)
         each_prompt_seq_len = encoder_seq_len // num_of_regions
@@ -439,25 +438,30 @@ class FluxRegionalPipeline(FluxPipeline):
         # handle each mask
         for i in range(num_of_regions):
             # txt attends to itself
-            regional_attention_mask[i * each_prompt_seq_len:(i + 1) * each_prompt_seq_len,
-            i * each_prompt_seq_len:(i + 1) * each_prompt_seq_len] = True
+            regional_attention_mask[
+                i * each_prompt_seq_len : (i + 1) * each_prompt_seq_len,
+                i * each_prompt_seq_len : (i + 1) * each_prompt_seq_len,
+            ] = True
 
             # txt attends to corresponding regional img
-            regional_attention_mask[i * each_prompt_seq_len:(i + 1) * each_prompt_seq_len, encoder_seq_len:] = masks[
-                i].transpose(-1, -2)
+            regional_attention_mask[i * each_prompt_seq_len : (i + 1) * each_prompt_seq_len, encoder_seq_len:] = masks[
+                i
+            ].transpose(-1, -2)
 
             # regional img attends to corresponding txt
-            regional_attention_mask[encoder_seq_len:, i * each_prompt_seq_len:(i + 1) * each_prompt_seq_len] = masks[i]
+            regional_attention_mask[encoder_seq_len:, i * each_prompt_seq_len : (i + 1) * each_prompt_seq_len] = masks[
+                i
+            ]
 
             # regional img attends to corresponding regional img
             img_size_masks = masks[i][:, :1].repeat(1, hidden_seq_len)
             img_size_masks_transpose = img_size_masks.transpose(-1, -2)
-            self_attend_masks = torch.logical_or(self_attend_masks,
-                                                 torch.logical_and(img_size_masks, img_size_masks_transpose))
+            self_attend_masks = torch.logical_or(
+                self_attend_masks, torch.logical_and(img_size_masks, img_size_masks_transpose)
+            )
 
             # update union
-            union_masks = torch.logical_or(union_masks,
-                                           torch.logical_or(img_size_masks, img_size_masks_transpose))
+            union_masks = torch.logical_or(union_masks, torch.logical_or(img_size_masks, img_size_masks_transpose))
 
         background_masks = torch.logical_not(union_masks)
 
@@ -466,11 +470,12 @@ class FluxRegionalPipeline(FluxPipeline):
         regional_attention_mask[encoder_seq_len:, encoder_seq_len:] = background_and_self_attend_masks
         ## done prepare masks for regional control
 
-
-        if 'single_inject_blocks_interval' not in self.joint_attention_kwargs:
-            self.joint_attention_kwargs['single_inject_blocks_interval'] = len(self.transformer.single_transformer_blocks)
-        if 'double_inject_blocks_interval' not in self.joint_attention_kwargs:
-            self.joint_attention_kwargs['double_inject_blocks_interval'] = len(self.transformer.transformer_blocks)
+        if "single_inject_blocks_interval" not in self.joint_attention_kwargs:
+            self.joint_attention_kwargs["single_inject_blocks_interval"] = len(
+                self.transformer.single_transformer_blocks
+            )
+        if "double_inject_blocks_interval" not in self.joint_attention_kwargs:
+            self.joint_attention_kwargs["double_inject_blocks_interval"] = len(self.transformer.transformer_blocks)
 
         # 7. Denoising loop
         # We set the index here to remove DtoH sync, helpful especially during compilation.
@@ -487,12 +492,12 @@ class FluxRegionalPipeline(FluxPipeline):
 
                 if i < mask_inject_steps:
                     chosen_prompt_embeds = regional_embeds
-                    self.joint_attention_kwargs['base_ratio'] = base_ratio
-                    self.joint_attention_kwargs['regional_attention_mask'] = regional_attention_mask
+                    self.joint_attention_kwargs["base_ratio"] = base_ratio
+                    self.joint_attention_kwargs["regional_attention_mask"] = regional_attention_mask
                 else:
                     chosen_prompt_embeds = prompt_embeds
-                    self.joint_attention_kwargs['base_ratio'] = None
-                    self.joint_attention_kwargs['regional_attention_mask'] = None
+                    self.joint_attention_kwargs["base_ratio"] = None
+                    self.joint_attention_kwargs["regional_attention_mask"] = None
 
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                 timestep = t.expand(latents.shape[0]).to(latents.dtype)
@@ -515,17 +520,22 @@ class FluxRegionalPipeline(FluxPipeline):
                     if negative_image_embeds is not None:
                         self._joint_attention_kwargs["ip_adapter_image_embeds"] = negative_image_embeds
 
+                    uncond_joint_attention_kwargs = {
+                        **self.joint_attention_kwargs,
+                        "base_ratio": None,
+                        "regional_attention_mask": None,
+                    }
                     with self.transformer.cache_context("uncond"):
                         neg_noise_pred = self.transformer(
                             hidden_states=latents,
                             timestep=timestep / 1000,
                             guidance=guidance,
                             pooled_projections=negative_pooled_prompt_embeds,
-                            encoder_hidden_states=chosen_negative_prompt_embeds,
+                            encoder_hidden_states=negative_prompt_embeds,
                             encoder_hidden_states_base=negative_prompt_embeds,
                             txt_ids=negative_text_ids,
                             img_ids=latent_image_ids,
-                            joint_attention_kwargs=self.joint_attention_kwargs,
+                            joint_attention_kwargs=uncond_joint_attention_kwargs,
                             return_dict=False,
                         )[0]
                     noise_pred = neg_noise_pred + true_cfg_scale * (noise_pred - neg_noise_pred)

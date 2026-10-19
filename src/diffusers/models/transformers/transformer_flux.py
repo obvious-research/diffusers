@@ -498,9 +498,7 @@ class FluxSingleTransformerBlock(nn.Module):
     ]:
         # Text lengths for proper [text || image] splitting per stream
         text_seq_len = encoder_hidden_states.shape[1]
-        text_seq_len_base = (
-            None if encoder_hidden_states_base is None else encoder_hidden_states_base.shape[1]
-        )
+        text_seq_len_base = None if encoder_hidden_states_base is None else encoder_hidden_states_base.shape[1]
         joint_attention_kwargs = joint_attention_kwargs or {}
 
         # Build single-stream sequences: [text || image]
@@ -534,8 +532,9 @@ class FluxSingleTransformerBlock(nn.Module):
             attn_output, attn_output_base = attn_output
 
         # Merge residual + MLP and split back into (text, image) using the correct text length
-        def process_attn(attn_o: torch.Tensor, g: torch.Tensor, mlp_states: torch.Tensor,
-                         res: torch.Tensor, split_len: int):
+        def process_attn(
+            attn_o: torch.Tensor, g: torch.Tensor, mlp_states: torch.Tensor, res: torch.Tensor, split_len: int
+        ):
             states = torch.cat([attn_o, mlp_states], dim=2)
             states = g.unsqueeze(1) * self.proj_out(states)
             states = res + states
@@ -606,8 +605,8 @@ class FluxTransformerBlock(nn.Module):
 
         # when using ControlNet, only one prompt is provided
         if encoder_hidden_states_base is not None:
-            norm_encoder_hidden_states_base, c_gate_msa_base, c_shift_mlp_base, c_scale_mlp_base, c_gate_mlp_base = self.norm1_context(
-                encoder_hidden_states_base, emb=temb
+            norm_encoder_hidden_states_base, c_gate_msa_base, c_shift_mlp_base, c_scale_mlp_base, c_gate_mlp_base = (
+                self.norm1_context(encoder_hidden_states_base, emb=temb)
             )
             joint_attention_kwargs = {
                 **joint_attention_kwargs,
@@ -661,12 +660,7 @@ class FluxTransformerBlock(nn.Module):
             return states
 
         encoder_hidden_states = process_attn(
-            context_attn_output,
-            c_gate_msa,
-            c_gate_mlp,
-            c_scale_mlp,
-            c_shift_mlp,
-            encoder_hidden_states
+            context_attn_output, c_gate_msa, c_gate_mlp, c_scale_mlp, c_shift_mlp, encoder_hidden_states
         )
 
         if encoder_hidden_states_base is not None:
@@ -676,7 +670,7 @@ class FluxTransformerBlock(nn.Module):
                 c_gate_mlp_base,
                 c_scale_mlp_base,
                 c_shift_mlp_base,
-                encoder_hidden_states_base
+                encoder_hidden_states_base,
             )
             return encoder_hidden_states, hidden_states, encoder_hidden_states_base
         else:
@@ -930,9 +924,8 @@ class FluxTransformer2DModel(
             joint_attention_kwargs["encoder_seq_len"] = encoder_hidden_states.shape[1]
             joint_attention_kwargs["encoder_seq_len_base"] = encoder_hidden_states_base.shape[1]
 
-            assert joint_attention_kwargs is not None and 'base_ratio' in joint_attention_kwargs
-            assert joint_attention_kwargs is not None and 'regional_attention_mask' in joint_attention_kwargs
-
+            assert joint_attention_kwargs is not None and "base_ratio" in joint_attention_kwargs
+            assert joint_attention_kwargs is not None and "regional_attention_mask" in joint_attention_kwargs
 
         encoder_hidden_states = self.context_embedder(encoder_hidden_states)
 
@@ -963,23 +956,24 @@ class FluxTransformer2DModel(
             image_rotary_emb_base = self.pos_embed(ids_base)
             joint_attention_kwargs["image_rotary_emb_base"] = image_rotary_emb_base
 
-        if joint_attention_kwargs is not None and 'single_inject_blocks_interval' in joint_attention_kwargs:
-            single_inject_blocks_interval = joint_attention_kwargs['single_inject_blocks_interval']
-            del joint_attention_kwargs['single_inject_blocks_interval']
+        if joint_attention_kwargs is not None and "single_inject_blocks_interval" in joint_attention_kwargs:
+            single_inject_blocks_interval = joint_attention_kwargs["single_inject_blocks_interval"]
+            del joint_attention_kwargs["single_inject_blocks_interval"]
         else:
             single_inject_blocks_interval = 1
 
-        if joint_attention_kwargs is not None and 'double_inject_blocks_interval' in joint_attention_kwargs:
-            double_inject_blocks_interval = joint_attention_kwargs['double_inject_blocks_interval']
-            del joint_attention_kwargs['double_inject_blocks_interval']
+        if joint_attention_kwargs is not None and "double_inject_blocks_interval" in joint_attention_kwargs:
+            double_inject_blocks_interval = joint_attention_kwargs["double_inject_blocks_interval"]
+            del joint_attention_kwargs["double_inject_blocks_interval"]
         else:
             double_inject_blocks_interval = 1
 
         for index_block, block in enumerate(self.transformer_blocks):
             if joint_attention_kwargs is not None and index_block % double_inject_blocks_interval != 0:
                 # delete attention mask to avoid region control
-                block_joint_attention_kwargs = {k: v for k, v in joint_attention_kwargs.items() if
-                                                k != 'regional_attention_mask'}
+                block_joint_attention_kwargs = {
+                    k: v for k, v in joint_attention_kwargs.items() if k != "regional_attention_mask"
+                }
             else:
                 block_joint_attention_kwargs = joint_attention_kwargs
 
@@ -991,7 +985,7 @@ class FluxTransformer2DModel(
                     temb,
                     image_rotary_emb,
                     encoder_hidden_states_base,
-                    block_joint_attention_kwargs
+                    block_joint_attention_kwargs,
                 )
 
             else:
@@ -1024,8 +1018,9 @@ class FluxTransformer2DModel(
         for index_block, block in enumerate(self.single_transformer_blocks):
             if joint_attention_kwargs is not None and index_block % single_inject_blocks_interval != 0:
                 # delete attention mask to avoid region control
-                block_joint_attention_kwargs = {k: v for k, v in joint_attention_kwargs.items() if
-                                                k not in ['regional_attention_mask']}
+                block_joint_attention_kwargs = {
+                    k: v for k, v in joint_attention_kwargs.items() if k not in ["regional_attention_mask"]
+                }
             else:
                 block_joint_attention_kwargs = joint_attention_kwargs
 
